@@ -14,6 +14,8 @@ namespace Microsoft.Diagnostics.Runtime
     /// </summary>
     public struct ClrObject : IAddressableTypedEntity, IEquatable<ClrObject>
     {
+        private const string ObjectNullMessage = "Object is null.";
+
         private IClrObjectHelpers Helpers => GetTypeOrThrow().ClrObjectHelpers;
 
         /// <summary>
@@ -290,7 +292,7 @@ namespace Microsoft.Diagnostics.Runtime
             ClrType type = GetTypeOrThrow();
 
             if (IsNull)
-                throw new InvalidOperationException();
+                throw new InvalidOperationException(ObjectNullMessage);
 
             ClrInstanceField? field = type.GetFieldByName(fieldName);
             if (field is null)
@@ -352,7 +354,7 @@ namespace Microsoft.Diagnostics.Runtime
         private ClrType GetTypeOrThrow()
         {
             if (IsNull)
-                throw new InvalidOperationException("Object is null.");
+                throw new InvalidOperationException(ObjectNullMessage);
 
             if (!IsValidObject)
                 throw new InvalidOperationException($"Object {Address:x} is corrupted, could not determine type.");
