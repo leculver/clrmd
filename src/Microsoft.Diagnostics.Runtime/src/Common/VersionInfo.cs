@@ -31,7 +31,10 @@ namespace Microsoft.Diagnostics.Runtime
         /// </summary>
         public readonly int Patch { get; }
 
-        internal VersionInfo(int major, int minor, int revision, int patch)
+        /// <summary>
+        /// Constructor.
+        /// </summary>
+        public VersionInfo(int major, int minor, int revision, int patch)
         {
             Major = major;
             Minor = minor;
