@@ -40,8 +40,6 @@ namespace Microsoft.Diagnostics.Runtime.Tests
                     Assert.Equal(frames[i++], frame.Method.Name);
                 }
             }
-
-            Assert.False(true, "Fail test on purpose to test CI.");
         }
 
         [Fact]
