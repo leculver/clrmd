@@ -3,149 +3,32 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
-using Microsoft.Diagnostics.Runtime.Tests.Fixtures;
+using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 
 namespace Microsoft.Diagnostics.Runtime.Tests
 {
-    public class ClrObjectTests : IClassFixture<ClrObjectConnection>
+    public class ClrObjectTests
     {
-        private readonly ClrObjectConnection _connection;
-
-        private ClrObject _primitiveCarrier => _connection.TestDataClrObject;
-
-        public ClrObjectTests(ClrObjectConnection connection)
-            => _connection = connection;
-
         [Fact]
-        public void GetField_WhenBool_ReturnsExpected()
+        public void RuntimeTypeTests()
         {
-            // Arrange
-            var prototype = _connection.Prototype;
+            using DataTarget dt = TestTargets.Types.LoadFullDump();
+            using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
 
-            // Act
-            bool actual = _primitiveCarrier.GetField<bool>(nameof(prototype.TrueBool));
+            ClrObject[] rttObjects = runtime.Heap.EnumerateObjects().Where(o => o.IsRuntimeType).ToArray();
+            Assert.NotNull(rttObjects);
 
-            // Assert
-            Assert.True(actual);
-        }
+            foreach (ClrObject rttObj in rttObjects)
+            {
+                Assert.False(rttObj.IsArray);
+                Assert.False(rttObj.IsException);
+                Assert.False(rttObj.IsNull);
+                Assert.True(rttObj.IsValidObject);
 
-        [Fact]
-        public void GetField_WhenLong_ReturnsExpected()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            long actual = _primitiveCarrier.GetField<long>(nameof(prototype.OneLargerMaxInt));
-
-            // Assert
-            Assert.Equal(prototype.OneLargerMaxInt, actual);
-        }
-
-        [Fact]
-        public void GetField_WhenEnum_ReturnsExpected()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            ClrObjectConnection.EnumType enumValue = _primitiveCarrier.GetField<ClrObjectConnection.EnumType>(nameof(prototype.SomeEnum));
-
-            // Assert
-            Assert.Equal(prototype.SomeEnum, enumValue);
-        }
-
-
-        [Fact]
-        public void GetStringField_WhenStringField_ReturnsPointerToObject()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            string text = _primitiveCarrier.GetStringField(nameof(prototype.HelloWorldString));
-
-            // Assert
-            Assert.Equal(prototype.HelloWorldString, text);
-        }
-
-        [Fact]
-        public void GetStringField_WhenTypeMismatch_ThrowsInvalidOperation()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            void readDifferentFieldTypeAsString() => _primitiveCarrier.GetStringField(nameof(prototype.SomeEnum));
-
-            // Assert
-            Assert.Throws<InvalidOperationException>(readDifferentFieldTypeAsString);
-        }
-
-        [Fact]
-        public void GetObjectField_WhenStringField_ReturnsPointerToObject()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            ClrObject textPointer = _primitiveCarrier.GetObjectField(nameof(prototype.HelloWorldString));
-
-            // Assert
-            Assert.Equal(prototype.HelloWorldString, (string)textPointer);
-        }
-
-        [Fact]
-        public void GetObjectField_WhenReferenceField_ReturnsPointerToObject()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            ClrObject referenceFieldValue = _primitiveCarrier.GetObjectField(nameof(prototype.SamplePointer));
-
-            // Assert
-            Assert.Equal("SamplePointerType", referenceFieldValue.Type.Name);
-        }
-
-        [Fact]
-        public void GetObjectField_WhenNonExistingField_ThrowsArgumentException()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            void readNonExistingField() => _primitiveCarrier.GetObjectField("nonExistingField");
-
-            // Assert
-            Assert.Throws<ArgumentException>(readNonExistingField);
-        }
-
-        [Fact]
-        public void GetValueClassField_WhenDateTime_ThrowsException()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            ClrValueClass birthday = _primitiveCarrier.GetValueClassField(nameof(prototype.Birthday));
-
-            // Assert
-            Assert.Equal(typeof(DateTime).FullName, birthday.Type.Name);
-        }
-
-        [Fact]
-        public void GetValueClassField_WhenGuid_ThrowsException()
-        {
-            // Arrange
-            var prototype = _connection.Prototype;
-
-            // Act
-            ClrValueClass sampleGuid = _primitiveCarrier.GetValueClassField(nameof(prototype.SampleGuid));
-
-            // Assert
-            Assert.Equal(typeof(Guid).FullName, sampleGuid.Type.Name);
+                Assert.NotNull(rttObj.AsRuntimeType());
+            }
         }
     }
 }
