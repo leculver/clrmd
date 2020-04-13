@@ -100,7 +100,7 @@ namespace Microsoft.Diagnostics.Runtime.Tests
 
         public static ClrStackFrame GetFrame(this ClrThread thread, string functionName)
         {
-            return thread.EnumerateStackTrace().Single(sf => sf.Method != null ? sf.Method.Name == functionName : false);
+            return thread.EnumerateStackTrace().Single(sf => sf.Method != null && sf.Method.Name == functionName);
         }
 
         public static string TestWorkingDirectory
