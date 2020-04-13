@@ -2,8 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
@@ -27,7 +25,9 @@ namespace Microsoft.Diagnostics.Runtime.Tests
                 Assert.False(rttObj.IsNull);
                 Assert.True(rttObj.IsValidObject);
 
-                Assert.NotNull(rttObj.AsRuntimeType());
+                ClrType rttType = rttObj.AsRuntimeType();
+                Assert.NotNull(rttType);
+                Assert.NotNull(rttType.Module);
             }
         }
     }
