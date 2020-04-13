@@ -353,7 +353,7 @@ namespace Microsoft.Diagnostics.Runtime
         /// Returns the hash code for this <see cref="ClrObject" /> based on its <see cref="Address" />.
         /// </summary>
         /// <returns>An <see cref="int" /> hash code for this instance.</returns>
-        public override int GetHashCode() => HashCode.Combine(Address);
+        public override int GetHashCode() => Address.GetHashCode();
 
         public bool Equals(IAddressableTypedEntity? entity) => entity is ClrObject other && Equals(other);
 
