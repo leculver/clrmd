@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.Diagnostics.Runtime.Implementation;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,7 +12,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
-using Microsoft.Diagnostics.Runtime.Implementation;
 using Xunit;
 
 namespace Microsoft.Diagnostics.Runtime.Tests
@@ -386,7 +386,8 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             else
                 Assert.Equal(structTest, field.Type);
 
-            Assert.Equal(sizeof(int), field.Size);
+            ClrInstanceField struct2Field = field.Type.GetFieldByName("struct2");
+            Assert.Equal(sizeof(int), struct2Field.Size);
 
             ClrInstanceField nes = structTestClass.GetFieldByName("nes");
             Assert.Equal(0, nes.Size);

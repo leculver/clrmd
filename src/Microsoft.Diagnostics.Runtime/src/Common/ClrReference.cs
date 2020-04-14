@@ -9,8 +9,8 @@ namespace Microsoft.Diagnostics.Runtime
 {
     public struct ClrReference
     {
-        const ulong OffsetFlag = 8000000000000000ul;
-        const ulong DependentFlag = 4000000000000000ul;
+        const ulong OffsetFlag = 0x8000000000000000;
+        const ulong DependentFlag = 0x4000000000000000;
 
         private readonly ulong _offsetOrHandle;
 

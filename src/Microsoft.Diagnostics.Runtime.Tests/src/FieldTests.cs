@@ -39,5 +39,46 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             Assert.Equal(typeName, field.Type.Name);
             Assert.Equal(size, field.Size);
         }
+
+        [Fact]
+        public void ReadValueClassTests()
+        {
+            using DataTarget dt = TestTargets.Types.LoadFullDump();
+            using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
+            ClrHeap heap = runtime.Heap;
+
+            ClrObject foo = (from o in heap.EnumerateObjects()
+                             where o.Type.Name == "Foo"
+                             select o).First();
+            Assert.True(foo.IsValidObject);
+            
+            ClrValueType st = foo.GetValueTypeField("st");
+
+            // Assert that read from a field works and is equal to GetValueTypeField's result
+            ClrInstanceField stField = foo.Type.GetFieldByName("st");
+            ClrValueType vtFromField = stField.ReadStruct(foo, interior: false);
+
+            Assert.Equal(st, vtFromField);
+
+            // Ensure that the "o" field we read is also enumerated from EnumerateReferencesWithFields and matches
+            // our value
+            ClrObject obj = st.GetObjectField("o");
+            Assert.True(obj.IsValidObject);
+
+            ClrReference objRef = foo.EnumerateReferencesWithFields().Where(r => r.Object == obj).Single();
+            Assert.Equal(obj, objRef.Object);
+            Assert.Equal(stField, objRef.Field);
+
+            Assert.True(stField.Offset < objRef.Offset);
+            Assert.True(objRef.Offset < stField.Offset + objRef.Object.Type.StaticSize);
+
+            // Struct field tests
+            ClrValueType struct2 = st.GetValueTypeField("struct2");
+            Assert.Equal(13, struct2.GetField<int>("value"));
+
+            // Other field tests
+            Assert.Equal("string2", st.GetStringField("s"));
+            Assert.Equal(12, st.GetField<int>("j"));
+        }
     }
 }

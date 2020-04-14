@@ -9,7 +9,7 @@ namespace Microsoft.Diagnostics.Runtime
     /// <summary>
     /// Represents an instance of a type which inherits from <see cref="ValueType"/>.
     /// </summary>
-    public struct ClrValueType : IAddressableTypedEntity
+    public struct ClrValueType : IAddressableTypedEntity, IEquatable<ClrValueType>
     {
         private IDataReader DataReader => GetTypeOrThrow().ClrObjectHelpers.DataReader;
         private readonly bool _interior;
@@ -136,8 +136,25 @@ namespace Microsoft.Diagnostics.Runtime
             return address;
         }
 
+        /// <summary>
+        /// Equality test.
+        /// </summary>
+        /// <param name="other"></param>
+        /// <returns></returns>
         public bool Equals(IAddressableTypedEntity? other)
             => other != null && Address == other.Address && Type == other.Type;
+
+        public override bool Equals(object? obj)
+        {
+            if (obj is ClrValueType cvt)
+                return Equals(cvt);
+
+            return false;
+        }
+
+        public override int GetHashCode() => Address.GetHashCode() ^ (Type?.GetHashCode() ?? 0);
+
+        public bool Equals(ClrValueType cvt) => Address == cvt.Address && Type == cvt.Type;
 
         private ClrType GetTypeOrThrow()
         {
@@ -146,5 +163,23 @@ namespace Microsoft.Diagnostics.Runtime
 
             return Type;
         }
+
+        public override string ToString() => $"@{Address:x} {Type?.Name}";
+
+        /// <summary>
+        /// Determines whether two specified <see cref="ClrObject" /> have the same value.
+        /// </summary>
+        /// <param name="left">First <see cref="ClrObject" /> to compare.</param>
+        /// <param name="right">Second <see cref="ClrObject" /> to compare.</param>
+        /// <returns><see langword="true"/> if <paramref name="left" /> <see cref="Equals(ClrValueType)" /> <paramref name="right" />; <see langword="false"/> otherwise.</returns>
+        public static bool operator ==(ClrValueType left, ClrValueType right) => left.Equals(right);
+
+        /// <summary>
+        /// Determines whether two specified <see cref="ClrObject" /> have different values.
+        /// </summary>
+        /// <param name="left">First <see cref="ClrObject" /> to compare.</param>
+        /// <param name="right">Second <see cref="ClrObject" /> to compare.</param>
+        /// <returns><see langword="true"/> if the value of <paramref name="left" /> is different from the value of <paramref name="right" />; <see langword="false"/> otherwise.</returns>
+        public static bool operator !=(ClrValueType left, ClrValueType right) => !(left == right);
     }
 }
