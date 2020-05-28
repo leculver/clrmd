@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -19,6 +20,8 @@ namespace Microsoft.Diagnostics.Runtime.Windows
 
         private readonly object _rvaLock = new object();
         private Stream? _rvaStream;
+        private ImmutableDictionary<ulong, int> _pageLookup;
+        private ulong _pageMask;
 
         public string DumpPath { get; }
         public override int PointerSize { get; }
@@ -34,6 +37,19 @@ namespace Microsoft.Diagnostics.Runtime.Windows
             MaxCacheSize = maxCacheSize;
             CacheTechnology = cacheTechnology;
             _segments = segments;
+
+            ulong pageSize = (uint)Environment.SystemPageSize;
+            _pageMask = ~(pageSize - 1);
+            Dictionary<ulong, int> dictionary = new Dictionary<ulong, int>();
+            for (int i = 0; i < _segments.Length; i++)
+            {
+                for (ulong start = _segments[i].VirtualAddress; start < _segments[i].End; start += pageSize)
+                    dictionary.Add(start & _pageMask, i);
+
+            }
+
+            _pageLookup = dictionary.ToImmutableDictionary();
+
 
             if (CacheTechnology == CacheTechnology.AWE)
             {
@@ -151,7 +167,9 @@ namespace Microsoft.Diagnostics.Runtime.Windows
             int curSegmentIndex = -1;
             MinidumpSegment targetSegment;
 
-            int memorySegmentStartIndex = segments.Search(address, (x, addr) => (x.VirtualAddress <= addr && addr < x.VirtualAddress + x.Size) ? 0 : x.VirtualAddress.CompareTo(addr));
+            // int memorySegmentStartIndex = segments.Search(address, (x, addr) => (x.VirtualAddress <= addr && addr < x.VirtualAddress + x.Size) ? 0 : x.VirtualAddress.CompareTo(addr));
+            if (!_pageLookup.TryGetValue(address & _pageMask, out int memorySegmentStartIndex))
+                memorySegmentStartIndex = -1;
 
             if (memorySegmentStartIndex >= 0)
             {
@@ -203,7 +221,11 @@ namespace Microsoft.Diagnostics.Runtime.Windows
 
                 if (address != targetSegment.VirtualAddress)
                 {
-                    curSegmentIndex = segments.Search(address, (x, addr) => (x.VirtualAddress <= addr && addr < x.VirtualAddress + x.Size) ? 0 : x.VirtualAddress.CompareTo(addr));
+                    //curSegmentIndex = segments.Search(address, (x, addr) => (x.VirtualAddress <= addr && addr < x.VirtualAddress + x.Size) ? 0 : x.VirtualAddress.CompareTo(addr));
+
+                    if (!_pageLookup.TryGetValue(address & _pageMask, out curSegmentIndex))
+                        curSegmentIndex = -1;
+
                     if (curSegmentIndex == -1)
                         return totalBytes;
 
