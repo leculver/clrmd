@@ -108,7 +108,7 @@ namespace Microsoft.Diagnostics.Runtime.Windows
 
             int cacheSize = cacheOptions.MaxDumpCacheSize > int.MaxValue ? int.MaxValue : (int)cacheOptions.MaxDumpCacheSize;
 
-            if (cacheSize <= CachedMemoryReader.MinimumCacheSize || new FileInfo(crashDump).Length <= cacheSize)
+            if (cacheSize < CachedMemoryReader.MinimumCacheSize || new FileInfo(crashDump).Length <= cacheSize)
             {
                 _file = MemoryMappedFile.CreateFromFile(stream, null, 0, MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: false);
                 MemoryMappedViewStream mmStream = _file.CreateViewStream(0, 0, MemoryMappedFileAccess.Read);

@@ -23,7 +23,7 @@ namespace Microsoft.Diagnostics.Runtime.Windows
         public CacheTechnology CacheTechnology { get; }
         public long MaxCacheSize { get; }
 
-        public const int MinimumCacheSize = 0x200_0000;
+        public const int MinimumCacheSize = 0x80_0000;
 
         public CachedMemoryReader(ImmutableArray<MinidumpSegment> segments, string dumpPath, FileStream stream, long maxCacheSize, CacheTechnology cacheTechnology, int pointerSize)
         {
