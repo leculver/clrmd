@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.Diagnostics.Runtime.CachedReader;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -108,7 +109,12 @@ namespace Microsoft.Diagnostics.Runtime.Windows
 
             int cacheSize = cacheOptions.MaxDumpCacheSize > int.MaxValue ? int.MaxValue : (int)cacheOptions.MaxDumpCacheSize;
 
-            if (cacheSize < CachedMemoryReader.MinimumCacheSize || new FileInfo(crashDump).Length <= cacheSize)
+            if (cacheOptions.UseNewMemoryReader)
+            {
+                _file = MemoryMappedFile.CreateFromFile(stream, null, 0, MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: false);
+                MemoryReader = new CachedReader.CachedReader(_file, segments, (uint)cacheOptions.PageSize, (ulong)cacheSize);
+            }
+            else if (cacheSize < CachedMemoryReader.MinimumCacheSize || new FileInfo(crashDump).Length <= cacheSize)
             {
                 _file = MemoryMappedFile.CreateFromFile(stream, null, 0, MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: false);
                 MemoryMappedViewStream mmStream = _file.CreateViewStream(0, 0, MemoryMappedFileAccess.Read);

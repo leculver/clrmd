@@ -16,6 +16,10 @@ namespace Microsoft.Diagnostics.Runtime
         public StringCaching CacheFieldNames { get; set; } = StringCaching.Cache;
         public StringCaching CacheMethodNames { get; set; } = StringCaching.Cache;
 
+
+        public bool UseNewMemoryReader { get; set; } = true;
+        public int PageSize { get; set; } = 4096;
+
         /// <summary>
         /// The maximum amount of memory (virtual address space) used by data readers to cache
         /// memory from the dumpfile.
