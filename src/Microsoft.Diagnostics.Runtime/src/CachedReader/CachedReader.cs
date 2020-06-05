@@ -21,6 +21,7 @@ namespace Microsoft.Diagnostics.Runtime.CachedReader
         private readonly MemoryMappedFile _file;
         private readonly ArrayPool<byte> _pool;
         public long _currSize;
+        private volatile bool _done;
 
         public uint PageSize { get; }
         public ulong MaxSize { get; }
@@ -50,12 +51,25 @@ namespace Microsoft.Diagnostics.Runtime.CachedReader
 
                 // todo, what if two segments start in the same page range?
             }
+
+            Thread thread = new Thread(CleanupThread);
+            thread.Start();
         }
 
         public void Dispose()
         {
+            _done = true;
             _file.Dispose();
             _wakeCleanup.Dispose();
+            _wakeCleanup.Set();
+        }
+
+        private void CleanupThread()
+        {
+            while (_wakeCleanup.WaitOne())
+            {
+                // todo:  loop through _pages and call CachedPage.PageOut until _currSize is much less than WakeThreshold
+            }
         }
 
         public int Read(ulong baseAddress, Span<byte> bytes)
@@ -125,6 +139,8 @@ namespace Microsoft.Diagnostics.Runtime.CachedReader
         {
             if (page.Length == PageSize)
                 _pool.Return(page);
+
+            Interlocked.Add(ref _currSize, -page.Length);
         }
     }
 
