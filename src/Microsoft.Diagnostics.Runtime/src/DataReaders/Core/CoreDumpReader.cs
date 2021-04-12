@@ -38,7 +38,7 @@ namespace Microsoft.Diagnostics.Runtime
             };
         }
 
-        public bool IsThreadSafe => false;
+        public bool IsThreadSafe => true;
 
         public void Dispose()
         {
