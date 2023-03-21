@@ -88,17 +88,6 @@ namespace Microsoft.Diagnostics.Runtime
             if (_found.TryGetValue(start, out ChainLink? link))
                 return link;
 
-            if (_targetPredicate is not null && _targetPredicate(start))
-            {
-                link = new ChainLink()
-                {
-                    Object = start,
-                };
-
-                _found.Add(start, link);
-                return link;
-            }
-
             if (start.Type is null || !start.Type.ContainsPointers)
                 return null;
 
