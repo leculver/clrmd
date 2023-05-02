@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Diagnostics.Runtime.DataReaders;
 using Microsoft.Diagnostics.Runtime.Implementation;
 using Microsoft.Diagnostics.Runtime.Interfaces;
 using Microsoft.Diagnostics.Runtime.MacOS;
@@ -235,6 +236,9 @@ namespace Microsoft.Diagnostics.Runtime
                     DumpFileFormat.CompressedArchive => throw new InvalidDataException($"Stream '{displayName}' is a compressed archived instead of a dump file."),
                     _ => throw new InvalidDataException($"Stream '{displayName}' is in an unknown or unsupported file format."),
                 };
+
+                if (cacheOptions.UseLru)
+                    reader = new ReadCache(reader, cacheOptions.CachePageCount, cacheOptions.CachePageSize);
 
                 return new DataTarget(new CustomDataTarget(reader) { CacheOptions = cacheOptions });
             }

@@ -21,6 +21,11 @@ namespace Microsoft.Diagnostics.Runtime
         /// </summary>
         public long MaxDumpCacheSize { get; set; } = IntPtr.Size == 8 ? 0x1_0000_0000 : 0x800_0000;
 
+        public int CachePageSize { get; set; } = 1024;
+        public int CachePageCount { get; set; } = (int)((IntPtr.Size == 8 ? 0x1_0000_0000 : 0x800_0000) / 1024);
+
+        public bool UseLru { get; set; } = true;
+
         /// <summary>
         /// Whether or not to attempt to use special OS memory features such as AWE on
         /// Windows.

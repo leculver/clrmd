@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.13.5" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\Microsoft.Diagnostics.Runtime.Utilities\Microsoft.Diagnostics.Runtime.Utilities.csproj" />
     <ProjectReference Include="..\..\Microsoft.Diagnostics.Runtime\Microsoft.Diagnostics.Runtime.csproj" />
     <ProjectReference Include="..\DbgEngExtension\DbgEngExtension.csproj" />
