@@ -182,6 +182,12 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 if (_lookup.TryGetValue(b, out entry))
                 {
                     _hits++;
+                    if (entry != _head)
+                    {
+                        Unlink(entry);
+                        SetHead(entry);
+                    }
+
                     return entry;
                 }
 
@@ -196,15 +202,12 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                     entry = _tail ?? throw new NullReferenceException(nameof(_tail));
 
                     _lookup.Remove(entry.BaseAddress);
-                    _tail = entry.Prev;
-                    entry.ReleaseAndReset();
+                    Unlink(_tail);
+                    entry.ReleaseBuffer();
                 }
 
                 entry.BaseAddress = b;
-                entry.Next = _head;
-                if (_head is not null)
-                    _head.Prev = entry;
-                _head = entry;
+                SetHead(entry);
                 _lookup.Add(b, entry);
             }
             finally
@@ -214,6 +217,24 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
             }
 
             return entry;
+        }
+
+        private void Unlink(Entry entry)
+        {
+            if (entry == _tail)
+                _tail = _tail.Prev;
+            if (entry == _head)
+                _head = _head.Next;
+
+            entry.Unlink();
+        }
+
+        private void SetHead(Entry entry)
+        {
+            entry.Next = _head;
+            if (_head is not null)
+                _head.Prev = entry;
+            _head = entry;
         }
 
         internal static void ReportMultiRead()
@@ -264,7 +285,7 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 return _buffer ?? buffer;
             }
 
-            public void ReleaseAndReset()
+            public void ReleaseBuffer()
             {
                 byte[]? buffer;
                 if (_cache.Multithreaded)
@@ -281,7 +302,10 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 {
                     ArrayPool<byte>.Shared.Return(buffer);
                 }
+            }
 
+            public void Unlink()
+            {
                 Entry? prev = Prev;
                 Entry? next = Next;
                 if (Prev is not null)
