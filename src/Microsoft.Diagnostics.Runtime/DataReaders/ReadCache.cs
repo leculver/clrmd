@@ -249,6 +249,9 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
 
         public class Entry
         {
+            [ThreadStatic]
+            private static byte[]? _saved;
+
             private LruCache _cache;
             private byte[]? _buffer;
 
@@ -268,7 +271,9 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 if (buffer is not null)
                     return buffer;
 
-                buffer = ArrayPool<byte>.Shared.Rent(_cache.PageSize);
+                (_saved, buffer) = (null, _saved);
+                buffer ??= new byte[_cache.PageSize];
+
                 int read = reader.Read(BaseAddress, buffer);
                 if (read < buffer.Length)
                 {
@@ -278,7 +283,8 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                     else
                         Array.Resize(ref buffer, read);
 
-                    ArrayPool<byte>.Shared.Return(toReturn);
+                    Debug.Assert(toReturn.Length == _cache.PageSize);
+                    _saved = toReturn;
                 }
 
                 Interlocked.CompareExchange(ref _buffer, buffer, null);
@@ -300,7 +306,7 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
 
                 if (buffer is not null && buffer.Length == _cache.PageSize)
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    _saved = buffer;
                 }
             }
 
