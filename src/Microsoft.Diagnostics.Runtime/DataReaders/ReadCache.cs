@@ -184,17 +184,16 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 else
                 {
                     entry = _tail ?? throw new NullReferenceException(nameof(_tail));
-                    entry.Dispose();
+
                     _lookup.Remove(entry.BaseAddress);
+                    _tail = entry.Prev;
+                    entry.ReleaseAndReset();
                 }
 
                 entry.BaseAddress = b;
-
-                if (entry.Prev is not null)
-                    entry.Prev.Next = null;
-
-                entry.Prev = null;
                 entry.Next = _head;
+                if (_head is not null)
+                    _head.Prev = entry;
                 _head = entry;
                 _lookup.Add(b, entry);
             }
@@ -212,7 +211,7 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
             Interlocked.Increment(ref _multiRead);
         }
 
-        public class Entry : IDisposable
+        public class Entry
         {
             private LruCache _cache;
             private byte[]? _buffer;
@@ -250,7 +249,7 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 return _buffer ?? buffer;
             }
 
-            public void Dispose()
+            public void ReleaseAndReset()
             {
                 byte[]? buffer;
                 if (_cache.Multithreaded)
@@ -267,7 +266,24 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 {
                     ArrayPool<byte>.Shared.Return(buffer);
                 }
+
+                Entry? prev = Prev;
+                Entry? next = Next;
+                if (Prev is not null)
+                {
+                    Debug.Assert(Prev.Next == null || Prev.Next == this);
+                    Prev.Next = next;
+                    Prev = null;
+                }
+                if (Next is not null)
+                {
+                    Debug.Assert(Next.Prev == null || Next.Prev == this);
+                    Next.Prev = prev;
+                    Next = null;
+                }
             }
+
+            public override string ToString() => BaseAddress.ToString("x");
         }
     }
 }
