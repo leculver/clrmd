@@ -50,12 +50,21 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                 LruCache.Entry entry = _cache.GetOrCreateCacheForAddress(currAddress);
                 byte[] entryBuffer = entry.GetOrRead(_reader);
                 if (entryBuffer.Length == 0)
-                    break;
+                {
+                    LruCache.ReportUnalignedRead();
+                    return _reader.Read(address, buffer);
+                }
 
                 Debug.Assert(entry.BaseAddress <= currAddress);
                 Debug.Assert(currAddress - entry.BaseAddress < int.MaxValue);
 
                 int diff = (int)(currAddress - entry.BaseAddress);
+                if (entryBuffer.Length < diff)
+                {
+                    LruCache.ReportUnalignedRead();
+                    return _reader.Read(address, buffer);
+                }
+
                 Span<byte> overlap = entryBuffer.AsSpan(diff, Math.Min(entryBuffer.Length - diff, buffer.Length - read));
                 Debug.Assert(overlap.Length > 0);
 
@@ -67,7 +76,7 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
             }
 
             if (readCount > 1)
-                _cache.ReportMultiRead();
+                LruCache.ReportMultiRead();
 
             return read;
         }
@@ -143,8 +152,9 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
         private static int _multiRead;
         private static int _hits;
         private static int _misses;
+        private static int _unalignedRead;
 
-        public static (int Hits, int Misses, int MultiRead) Stats => (_hits, _misses, _multiRead);
+        public static (int Hits, int Misses, int MultiRead, int UnalignedRead) Stats => (_hits, _misses, _multiRead, _unalignedRead);
 
         public bool Multithreaded { get; }
         public int PageSize { get; }
@@ -206,9 +216,14 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
             return entry;
         }
 
-        internal void ReportMultiRead()
+        internal static void ReportMultiRead()
         {
             Interlocked.Increment(ref _multiRead);
+        }
+
+        internal static void ReportUnalignedRead()
+        {
+            Interlocked.Increment(ref _unalignedRead);
         }
 
         public class Entry
@@ -262,7 +277,7 @@ namespace Microsoft.Diagnostics.Runtime.DataReaders
                     _buffer = null;
                 }
 
-                if (buffer is not null && buffer.Length > 0)
+                if (buffer is not null && buffer.Length == _cache.PageSize)
                 {
                     ArrayPool<byte>.Shared.Return(buffer);
                 }
