@@ -104,11 +104,7 @@ namespace Microsoft.Diagnostics.Runtime.Windows
             ImmutableArray<MinidumpSegment> segments = GetSegments(stream);
 
             MinidumpMemoryReader memoryReader;
-            if (cacheOptions.UseLru)
-            {
-                memoryReader = new UncachedMemoryReader(segments, stream, PointerSize, leaveOpen);
-            }
-            else if (stream is FileStream fs) // we can optimize for FileStreams
+            if (cacheOptions.UseArrayPool && stream is FileStream fs) // we can optimize for FileStreams
             {
                 int cacheSize = cacheOptions.MaxDumpCacheSize > int.MaxValue ? int.MaxValue : (int)cacheOptions.MaxDumpCacheSize;
                 bool isTinyDump = stream.Length <= cacheSize;

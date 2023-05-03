@@ -8,63 +8,72 @@ using BenchmarkDotNet.Running;
 using Microsoft.Diagnostics.Runtime;
 using Microsoft.Diagnostics.Runtime.DataReaders;
 
-Summary summary = BenchmarkRunner.Run<HeapWalkBenchmark>();
-Console.WriteLine(summary);
-
-public class HeapWalkBenchmark
+bool useArrayPool;
+bool useLru;
+switch (args[1].ToLower())
 {
-    private DataTarget? _dataTarget;
-    private ClrRuntime? _runtime;
+    case "lru":
+        useLru = true;
+        useArrayPool = false;
+        break;
 
-    [Params(0x80, 0x200, 0x800, 0x1000, 0x2000)]
-    public int PageSize { get; set; }
+    case "arraypool":
+        useLru = false;
+        useArrayPool = true;
+        break;
 
-    [Params(0x10, 0x100, 0x1_000, 0x8_000, 0x10_000, 0x40_000)]
-    public int PageCount { get; set; }
+    case "none":
+        useLru = false;
+        useArrayPool = false;
+        break;
 
-    [IterationSetup]
-    public void IterationSetup()
+    default:
+        throw new ArgumentException(nameof(args));
+}
+
+
+CacheOptions cacheOptions = new() { UseLru = useLru, UseArrayPool = useArrayPool };
+using DataTarget dataTarget = DataTarget.LoadDump(args[0], cacheOptions);
+using ClrRuntime runtime = dataTarget.ClrVersions.Single().CreateRuntime();
+
+HashSet<ulong> seen = new();
+
+foreach (ClrRoot root in runtime.Heap.EnumerateRoots())
+{
+    seen.Add(root.Object);
+}
+
+Console.WriteLine($"Found {seen.Count:n0} root objects.");
+
+HashSet<string> names = new();
+
+
+int count = 0;
+
+Stopwatch sw = Stopwatch.StartNew();
+foreach (ClrObject obj in runtime.Heap.EnumerateObjects())
+{
+    if ((++count % 100_000) == 0)
+        Console.Title = $"{count:n0} objects";
+
+    if (names.Contains(obj.Type?.Name ?? ""))
+        continue;
+
+    foreach (ClrObject child in obj.EnumerateReferences())
     {
-        CacheOptions options = new()
-        {
-            CachePageCount = PageCount,
-            CachePageSize = PageSize,
-            UseLru = true,
-            UseOSMemoryFeatures = false,
-        };
-
-        _dataTarget = DataTarget.LoadDump(@"X:\Microsoft.Exchange.Diagnostics.Profiling.Agent003.DMP", options);
-        // Set up your test environment using PageSize and PageCount
-
-        if (_dataTarget is null)
-            throw new InvalidOperationException();
-
-        _runtime = _dataTarget.ClrVersions.Single().CreateRuntime();
-    }
-
-    [IterationCleanup]
-    public void IterationCleanup()
-    {
-        _runtime?.Dispose();
-        _dataTarget?.Dispose();
-    }
-
-    [Benchmark]
-    public void TestHeapWalkWithReferences()
-    {
-        if (_runtime is null)
-            throw new InvalidOperationException();
-
-        foreach (ClrObject obj in _runtime.Heap.EnumerateObjects())
-        {
-            if (obj.ContainsPointers)
-            {
-                _ = obj.Type?.Name;
-                foreach (ulong _ in obj.EnumerateReferenceAddresses())
-                {
-
-                }
-            }
-        }
+        if (seen.Contains(child))
+            break;
     }
 }
+
+Console.WriteLine(count.ToString("n0"));
+
+sw.Stop();
+GC.Collect();
+
+Console.WriteLine(sw.Elapsed);
+Console.WriteLine($"Considered {seen.Count:n0} objects");
+Console.WriteLine($"WorkingSet: {Process.GetCurrentProcess().WorkingSet64:n0}");
+Console.WriteLine($"PeakWorkingSet: {Process.GetCurrentProcess().PeakWorkingSet64:n0}");
+(int Hits, int Misses, int MultiRead, int UnalignedRead) stats = LruCache.Stats;
+Console.WriteLine($"hits:{stats.Hits:n0} misses:{stats.Misses:n0} multi:{stats.MultiRead:n0} unaligned:{stats.UnalignedRead:n0}");
