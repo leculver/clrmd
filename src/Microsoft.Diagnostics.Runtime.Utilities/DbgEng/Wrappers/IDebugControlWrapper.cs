@@ -88,11 +88,23 @@ namespace Microsoft.Diagnostics.Runtime.Utilities.DbgEng
             return vtable->GetExecutionStatus(self, out status);
         }
 
+        int IDebugControl.SetExecutionStatus(DEBUG_STATUS status)
+        {
+            GetVTable(this, out nint self, out IDebugControlVtable* vtable);
+            return vtable->SetExecutionStatus(self, status);
+        }
+
         int IDebugControl.Execute(DEBUG_OUTCTL outputControl, string command, DEBUG_EXECUTE flags)
         {
             GetVTable(this, out nint self, out IDebugControlVtable* vtable);
             fixed (char* commandPtr = command)
                 return vtable->ExecuteWide(self, outputControl, commandPtr, flags);
+        }
+
+        int IDebugControl.GetLastEventInformation(out DEBUG_EVENT evt, out int pid, out int threadId)
+        {
+            GetVTable(this, out nint self, out IDebugControlVtable* vtable);
+            return vtable->GetLastEventInformation(self, out evt, out pid, out threadId, null, 0, out _, null, 0, out _);
         }
 
         private static void GetVTable(object ths, out nint self, out IDebugControlVtable* vtable)

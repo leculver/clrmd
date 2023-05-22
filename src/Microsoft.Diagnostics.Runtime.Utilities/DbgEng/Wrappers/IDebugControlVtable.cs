@@ -64,7 +64,7 @@ namespace Microsoft.Diagnostics.Runtime.Utilities.DbgEng
         public readonly delegate* unmanaged[Stdcall]<nint, ImageFileMachine*, int> GetEffectiveProcessorType;
         private readonly nint SetEffectiveProcessorType;
         public readonly delegate* unmanaged[Stdcall]<nint, out DEBUG_STATUS, int> GetExecutionStatus;
-        private readonly nint SetExecutionStatus;
+        public readonly delegate* unmanaged[Stdcall]<nint, DEBUG_STATUS, int> SetExecutionStatus;
         private readonly nint GetCodeLevel;
         private readonly nint SetCodeLevel;
         private readonly nint GetEngineOptions;
@@ -108,7 +108,7 @@ namespace Microsoft.Diagnostics.Runtime.Utilities.DbgEng
         private readonly nint GetExceptionFilterSecondCommand;
         private readonly nint SetExceptionFilterSecondCommand;
         public readonly delegate* unmanaged[Stdcall]<nint, uint, uint, int> WaitForEvent;
-        private readonly nint GetLastEventInformation;
+        public readonly delegate* unmanaged[Stdcall]<nint, out DEBUG_EVENT, out int, out int, byte*, uint, out uint, byte*, uint, out uint, int> GetLastEventInformation;
 
         /* IDebugControl2 */
         private readonly nint GetCurrentTimeDate;

@@ -17,7 +17,9 @@ namespace Microsoft.Diagnostics.Runtime.Utilities.DbgEng
         void Write(DEBUG_OUTPUT mask, string text);
         void WriteLine(DEBUG_OUTPUT mask, string text) => Write(mask, text + '\n');
         int GetExecutionStatus(out DEBUG_STATUS status);
+        int SetExecutionStatus(DEBUG_STATUS status);
         int Execute(DEBUG_OUTCTL outputControl, string command, DEBUG_EXECUTE flags);
         void ControlledOutput(DEBUG_OUTCTL outCtl, DEBUG_OUTPUT dbgOutput, string message);
+        int GetLastEventInformation(out DEBUG_EVENT evt, out int pid, out int threadId);
     }
 }

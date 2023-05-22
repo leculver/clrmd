@@ -1,13 +1,14 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using DbgEngExtension;
 using Microsoft.Diagnostics.Runtime;
 using Microsoft.Diagnostics.Runtime.Utilities;
 using Microsoft.Diagnostics.Runtime.Utilities.DbgEng;
 
-if (args.Length != 1 || !File.Exists(args[0]))
+if (args.Length != 2 || !File.Exists(args[0]))
     Exit("Usage:  DbgEngStandalone [dump-file-path]");
 
 // There is a copy of dbgeng.dll in the System32 folder, but that copy of DbgEng is very old
@@ -29,66 +30,40 @@ using IDisposable dbgeng = IDebugClient.Create(dbgengPath);
 IDebugClient client = (IDebugClient)dbgeng;
 IDebugControl control = (IDebugControl)dbgeng;
 
-// Most functions return an HRESULT int, but ClrMD has an 'HResult' helper.
-HResult hr = client.OpenDumpFile(args[0]);
+// Launch the target program in a new process
+Dictionary<string, string> env = new()
+{
+    { "DOTNET_ROOT", args[1] },
+    { "DOTNET_EnableWriteXorExecute", "0" },
+    { "DOTNET_ENABLED_SOS_LOGGING", @"d:\work\sos.log" }
+};
+DEBUG_CREATE_PROCESS_OPTIONS opts = new()
+{
+    CreateFlags = DEBUG_CREATE_PROCESS.DEBUG_PROCESS
+};
+
+HResult hr = client.CreateProcessAndAttach(args[0], Path.GetDirectoryName(args[0]), env, DEBUG_ATTACH.DEFAULT, opts);
 CheckHResult(hr, $"Failed to load {args[0]}.");
 
-// You have to wait for dbgeng to attach to the dump file
 hr = control.WaitForEvent(TimeSpan.MaxValue);
 CheckHResult(hr, "WaitForEvent unexpectedly failed.");
 
-// DbgEngOutputHolder will capture output of the debugger.  Here we will print dbgeng
-// messages in Yellow with its output mask in Green as an example:
-using (DbgEngOutputHolder output = new(client, DEBUG_OUTPUT.ALL))
-{
-    output.OutputReceived += (text, flags) => {
-        ConsoleColor oldColor = Console.ForegroundColor;
+using DbgEngOutputHolder output = new(client, DEBUG_OUTPUT.ALL);
+output.OutputReceived += (text, flags) => {
+    ConsoleColor oldColor = Console.ForegroundColor;
 
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.Write($"[{flags}] ");
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.Write(text);
-        Console.Out.Flush();
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.Write($"[{flags}] ");
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.Write(text);
+    Console.Out.Flush();
 
-        Console.ForegroundColor = oldColor;
-    };
+    Console.ForegroundColor = oldColor;
+};
 
-    hr = control.Execute(DEBUG_OUTCTL.THIS_CLIENT, ".chain", DEBUG_EXECUTE.DEFAULT);
-}
+hr = control.Execute(DEBUG_OUTCTL.THIS_CLIENT, ".chain", DEBUG_EXECUTE.DEFAULT);
 
-// Running this same command without capturing the output results in no output hitting the console:
-control.Execute(DEBUG_OUTCTL.THIS_CLIENT, ".chain", DEBUG_EXECUTE.DEFAULT);
-
-
-// We can create an instance of ClrMD with Microsoft.Diagnostics.Runtime.Utilities too:
-DataTarget dt = DbgEngIDataReader.CreateDataTarget(dbgeng);
-
-Console.WriteLine("CLR runtimes in this dump file:");
-foreach (ClrRuntime runtime in dt.ClrVersions.Select(clr => clr.CreateRuntime()))
-{
-    Console.WriteLine($"    {runtime.ClrInfo}:");
-
-    Console.WriteLine("        First 10 objects:");
-    foreach (ClrObject obj in runtime.Heap.EnumerateObjects().Take(10))
-        Console.WriteLine($"            {obj}");
-}
-
-// Let's re-use our DbgEngExtension as an example.  We don't redirect Console.WriteLine because
-// we are a standalone application and DbgEng isn't writing to console.  Note that also putting
-// a "using" statement here is optional.  By having "using" here, we fully QueryInterface from
-// scratch, build ClrMD from scratch, and tear it down in Dispose.  If we don't dispose any
-// DbgEngCommand subclass, then we cache the IDebug* interfaces and ClrMD for performance.
-using (MHeap heapExtension = new(dbgeng, redirectConsoleOutput: false))
-{
-    heapExtension.Run(statOnly: false);
-
-    // We can also initialize DbgEngCommand classes with another class.  By initializing MAddress
-    // with heapExtension, we re-use and share all DbgEng interfaces and ClrMD classes.  This
-    // greatly improves performance.  When heapExtension is disposed at the end of this using
-    // statement, dbgeng/ClrMD will be cleaned up for maddress too.
-    MAddress maddress = new(heapExtension);
-    maddress.PrintMemorySummary(printAllMemory: true, showImageTable: true, includeReserveMemory: false, tagReserveMemoryHeuristically: false);
-}
+MainLoop(control, out hr);
 
 // End of Demo.
 
@@ -107,17 +82,20 @@ static void Exit(string message, int exitCode = -1)
     Environment.Exit(exitCode);
 }
 
-static string? FindDbgEngPath()
+static string? FindDbgEngPath(string? hint = null)
 {
     if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         throw new NotSupportedException($"DbgEng only exists for Windows.");
+
+    if (CheckOneFolderForDbgEng(hint))
+        return hint;
 
     if (CheckOneFolderForDbgEng(ExpectedDbgEngInstallPath))
         return ExpectedDbgEngInstallPath;
 
     string? dbgEngEnv = Environment.GetEnvironmentVariable(ExpectedDbgEngPathEnvVariable);
     if (CheckOneFolderForDbgEng(dbgEngEnv))
-        return dbgEngEnv!;
+        return dbgEngEnv;
 
     string system32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
     if (CheckOneFolderForDbgEng(system32))
@@ -126,11 +104,56 @@ static string? FindDbgEngPath()
     return null;
 }
 
-static bool CheckOneFolderForDbgEng(string? directory)
+static bool CheckOneFolderForDbgEng([NotNullWhen(true)] string? directory)
 {
     if (!Directory.Exists(directory))
         return false;
 
     string path = Path.Combine(directory, "dbgeng.dll");
     return File.Exists(path);
+}
+
+static void MainLoop(IDebugControl control, out HResult hr)
+{
+    while (true)
+    {
+        // Wait for a debug event
+        hr = control.WaitForEvent(TimeSpan.MaxValue);
+
+        if (hr == HResult.S_OK)
+        {
+            // Retrieve the event type
+            control.GetLastEventInformation(out DEBUG_EVENT eventType, out int pid, out int tid);
+
+            switch (eventType)
+            {
+                case DEBUG_EVENT.BREAKPOINT:
+                    Console.WriteLine("Breakpoint hit");
+
+                    // Continue execution
+                    hr = control.SetExecutionStatus(DEBUG_STATUS.GO);
+                    if (!hr)
+                    {
+                        Console.WriteLine("Failed to continue execution");
+                        return;
+                    }
+
+                    break;
+
+                case DEBUG_EVENT.EXIT_PROCESS:
+                    Console.WriteLine("Process exited");
+                    return;
+
+                default:
+                    Console.WriteLine($"Other event: {eventType}");
+
+                    // Continue execution
+                    hr = control.SetExecutionStatus(DEBUG_STATUS.GO);
+                    if (!hr)
+                        return;
+
+                    break;
+            }
+        }
+    }
 }

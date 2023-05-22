@@ -2,7 +2,7 @@
   "profiles": {
     "DbgEngStandalone": {
       "commandName": "Project",
-      "commandLineArgs": "..\\..\\..\\..\\..\\src\\TestTargets\\bin\\x64\\AppDomains_wks.dmp"
+      "commandLineArgs": "C:\\Windows\\System32\\np2.exe d:\\git\\dotnet\\diagnostics\\dotnet-test\\shared\\Microsoft.NETCore.App\\7.0.5"
     }
   }
 }
