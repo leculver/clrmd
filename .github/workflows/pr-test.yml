@@ -1,0 +1,42 @@
+name: PR Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+      - release/*
+    paths-ignore:
+      - 'doc/**'
+      - 'LICENSE'
+
+jobs:
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Microsoft.Diagnostics.Runtime.sln
+
+      - name: Build
+        run: dotnet build Microsoft.Diagnostics.Runtime.sln --configuration ${{ matrix.configuration }} --no-restore
+
+      - name: Build TestTasks
+        run: dotnet build src/TestTasks/TestTasks.csproj --configuration ${{ matrix.configuration }} --no-restore
+
+      - name: Build TestTargets
+        run: dotnet msbuild src/TestTargets/TestTargets.proj
+
+      - name: Test
+        run: dotnet test src/Microsoft.Diagnostics.Runtime.Tests/Microsoft.Diagnostics.Runtime.Tests.csproj --configuration ${{ matrix.configuration }} --no-build
