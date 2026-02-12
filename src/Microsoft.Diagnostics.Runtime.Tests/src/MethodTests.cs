@@ -84,6 +84,73 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             }
         }
 
+        /// <summary>
+        /// Regression test for issue #1306: GetMethodByHandle should resolve all methods
+        /// on a struct implementing an interface, including unboxing stubs and inherited
+        /// methods that haven't been JIT-compiled.
+        /// </summary>
+        [Fact]
+        public void GetMethodByHandle_StructImplementingInterface_FindsAllMethods()
+        {
+            using DataTarget dt = TestTargets.Types.LoadFullDump();
+            using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
+
+            ClrModule module = runtime.GetModule("sharedlibrary.dll");
+            ClrType type = module.GetTypeByName("StructWithInterface");
+
+            Assert.NotNull(type);
+            Assert.True(type.IsValueType);
+            Assert.NotEmpty(type.Methods);
+
+            foreach (ClrMethod method in type.Methods)
+            {
+                Assert.NotEqual(0ul, method.MethodDesc);
+                ClrMethod found = runtime.GetMethodByHandle(method.MethodDesc);
+                Assert.NotNull(found);
+                Assert.Equal(method.Name, found.Name);
+            }
+        }
+
+        /// <summary>
+        /// Regression test for issue #1306: Struct methods without native code (unboxing stubs,
+        /// un-jitted inherited methods) should return CompilationType.None, while JIT-compiled
+        /// methods should return a non-None compilation type.
+        /// </summary>
+        [Fact]
+        public void StructMethodCompilationType_MatchesJitStatus()
+        {
+            using DataTarget dt = TestTargets.Types.LoadFullDump();
+            using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
+
+            ClrModule module = runtime.GetModule("sharedlibrary.dll");
+            ClrType type = module.GetTypeByName("StructWithInterface");
+
+            Assert.NotNull(type);
+
+            bool hasJittedMethod = false;
+            bool hasUnjittedMethod = false;
+
+            foreach (ClrMethod method in type.Methods)
+            {
+                ClrMethod found = runtime.GetMethodByHandle(method.MethodDesc);
+                Assert.NotNull(found);
+
+                if (found.HotColdInfo.HotStart != 0)
+                {
+                    Assert.NotEqual(MethodCompilationType.None, found.CompilationType);
+                    hasJittedMethod = true;
+                }
+                else
+                {
+                    Assert.Equal(MethodCompilationType.None, found.CompilationType);
+                    hasUnjittedMethod = true;
+                }
+            }
+
+            Assert.True(hasJittedMethod, "Expected at least one JIT-compiled method on StructWithInterface");
+            Assert.True(hasUnjittedMethod, "Expected at least one un-jitted method on StructWithInterface");
+        }
+
         [FrameworkFact]
         public void CompleteSignatureIsRetrievedForMethodsWithGenericParameters()
         {

@@ -68,9 +68,14 @@ class Types
         // Ensure InstanceMethod is JIT'd so delegate tests can resolve it
         try { new Types().InstanceMethod(); } catch { }
 
+        // Exercise struct interface dispatch to create unboxing stub + JIT the implementation
+        IStructTest structTest = new StructWithInterface();
+        int structResult = structTest.TestMethod();
+
         Inner();
 
         GC.KeepAlive(foos);
+        GC.KeepAlive(structResult);
     }
 
     private static void Inner()
