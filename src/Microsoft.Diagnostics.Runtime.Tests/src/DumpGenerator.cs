@@ -168,12 +168,21 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         {
             bool isDll = exePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
 
+            // Use a locally built runtime if CLRMD_TEST_DOTNET_ROOT is set.
+            string customDotnetRoot = Environment.GetEnvironmentVariable("CLRMD_TEST_DOTNET_ROOT");
+            string dotnetExe = !string.IsNullOrEmpty(customDotnetRoot)
+                ? Path.Combine(customDotnetRoot, "dotnet")
+                : "dotnet";
+
             ProcessStartInfo psi;
-            if (isDll)
+            if (isDll || !string.IsNullOrEmpty(customDotnetRoot))
             {
-                psi = new ProcessStartInfo("dotnet")
+                // When using a custom runtime, always launch via dotnet to ensure
+                // the apphost doesn't resolve to the system runtime.
+                string target = isDll ? exePath : Path.ChangeExtension(exePath, ".dll");
+                psi = new ProcessStartInfo(dotnetExe)
                 {
-                    Arguments = $"\"{exePath}\"",
+                    Arguments = $"exec \"{target}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
@@ -189,6 +198,13 @@ namespace Microsoft.Diagnostics.Runtime.Tests
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+            }
+
+            // If using a custom runtime, set DOTNET_ROOT so the host finds it.
+            if (!string.IsNullOrEmpty(customDotnetRoot))
+            {
+                psi.Environment["DOTNET_ROOT"] = customDotnetRoot;
+                psi.Environment["DOTNET_ROLL_FORWARD"] = "LatestMajor";
             }
 
             // Configure crash dump collection via environment variables
