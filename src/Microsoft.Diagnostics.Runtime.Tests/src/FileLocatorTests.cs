@@ -40,5 +40,50 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             Assert.NotNull(dac);
             Assert.True(File.Exists(dac));
         }
+        [Fact]
+        public void SymbolServerUsesDefaultTimeout()
+        {
+            FileSymbolCache cache = new(Helpers.TestWorkingDirectory);
+            SymbolServer server = new(cache, "http://msdl.microsoft.com/download/symbols", trace: false, credential: null);
+            Assert.Equal(SymbolServer.DefaultTimeout, server.Timeout);
+        }
+
+        [Fact]
+        public void SymbolServerUsesCustomTimeout()
+        {
+            TimeSpan custom = TimeSpan.FromSeconds(42);
+            FileSymbolCache cache = new(Helpers.TestWorkingDirectory);
+            SymbolServer server = new(cache, "http://msdl.microsoft.com/download/symbols", trace: false, credential: null, timeout: custom);
+            Assert.Equal(custom, server.Timeout);
+        }
+
+        [Fact]
+        public void CreateFromSymbolPathThreadsTimeout()
+        {
+            TimeSpan custom = TimeSpan.FromSeconds(99);
+
+            // Empty symbol path triggers the default SymbolServer fallback, which threads timeout.
+            IFileLocator locator = SymbolGroup.CreateFromSymbolPath(
+                string.Empty,
+                trace: false,
+                credential: null,
+                timeout: custom);
+
+            SymbolServer server = Assert.IsType<SymbolServer>(locator);
+            Assert.Equal(custom, server.Timeout);
+        }
+
+        [Fact]
+        public void CreateFromSymbolPathUsesDefaultTimeoutWhenNull()
+        {
+            IFileLocator locator = SymbolGroup.CreateFromSymbolPath(
+                string.Empty,
+                trace: false,
+                credential: null,
+                timeout: null);
+
+            SymbolServer server = Assert.IsType<SymbolServer>(locator);
+            Assert.Equal(SymbolServer.DefaultTimeout, server.Timeout);
+        }
     }
 }

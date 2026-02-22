@@ -41,21 +41,26 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         /// </summary>
         public long MaxDownloadSize { get; set; } = DefaultMaxDownloadSize;
 
+        /// <summary>
+        /// Gets the HTTP timeout for symbol server requests.
+        /// </summary>
+        public TimeSpan Timeout => _http.Timeout;
+
         public Uri Server { get; private set; }
         private bool IsSymweb => Server.Host.Equals(SymwebHost.Host, StringComparison.OrdinalIgnoreCase);
 
-        internal SymbolServer(FileSymbolCache cache, string server, bool trace, TokenCredential? credential)
-            : this(cache, Sanitize(server), trace, credential)
+        internal SymbolServer(FileSymbolCache cache, string server, bool trace, TokenCredential? credential, TimeSpan? timeout = null)
+            : this(cache, Sanitize(server), trace, credential, timeout)
         {
         }
 
-        internal SymbolServer(FileSymbolCache cache, Uri server, bool trace, TokenCredential? credential)
+        internal SymbolServer(FileSymbolCache cache, Uri server, bool trace, TokenCredential? credential, TimeSpan? timeout = null)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _trace = trace;
             Server = EnsureTrailingSlash(server);
             _tokenCredential = credential;
-            _http.Timeout = DefaultTimeout;
+            _http.Timeout = timeout ?? DefaultTimeout;
 
             if (IsSymweb)
                 _tokenCredential ??= new InteractiveBrowserCredential();
