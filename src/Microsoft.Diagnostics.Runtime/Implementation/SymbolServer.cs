@@ -24,6 +24,11 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         /// </summary>
         public const long DefaultMaxDownloadSize = 16 * 1024 * 1024;
 
+        /// <summary>
+        /// Default HTTP timeout for symbol server requests: 180 seconds.
+        /// </summary>
+        public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(180);
+
         private readonly TokenCredential? _tokenCredential;
         private AccessToken _accessToken;
         private readonly FileSymbolCache _cache;
@@ -50,6 +55,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             _trace = trace;
             Server = EnsureTrailingSlash(server);
             _tokenCredential = credential;
+            _http.Timeout = DefaultTimeout;
 
             if (IsSymweb)
                 _tokenCredential ??= new InteractiveBrowserCredential();
