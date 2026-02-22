@@ -121,9 +121,18 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             if (key == null)
                 return null;
 
-            Stream? stream = FindFileOnServer(key).Result;
-            if (stream != null)
-                return _cache.Store(stream, key);
+            try
+            {
+                Stream? stream = FindFileOnServer(key).Result;
+                if (stream != null)
+                    return _cache.Store(stream, key);
+            }
+            catch (AggregateException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
 
             return null;
         }
@@ -148,6 +157,9 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             catch (AggregateException)
             {
             }
+            catch (InvalidOperationException)
+            {
+            }
 
             return null;
         }
@@ -166,11 +178,27 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             if (_trace)
                 Trace.WriteLine($"ClrMD symbol request: {fullPath} returned {response.StatusCode}");
 
-            if (response.IsSuccessStatusCode)
-                return await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                response.Dispose();
+                return null;
+            }
 
-            response.Dispose();
-            return null;
+            // Reject early if Content-Length exceeds the configured limit.
+            long? contentLength = response.Content.Headers.ContentLength;
+            if (contentLength.HasValue && contentLength.Value > MaxDownloadSize)
+            {
+                if (_trace)
+                    Trace.WriteLine($"ClrMD symbol request: {fullPath} rejected — Content-Length {contentLength.Value:N0} exceeds limit of {MaxDownloadSize:N0} bytes.");
+
+                response.Dispose();
+                return null;
+            }
+
+            // Wrap in a BoundedStream to enforce the limit during reads, in case
+            // Content-Length is absent or the server sends more data than declared.
+            Stream inner = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            return new BoundedStream(inner, MaxDownloadSize);
         }
 
 
