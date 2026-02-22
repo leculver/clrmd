@@ -125,7 +125,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             {
                 Stream? stream = FindFileOnServer(key).Result;
                 if (stream != null)
-                    return _cache.Store(stream, key);
+                    return _cache.Store(stream, key, MaxDownloadSize);
             }
             catch (AggregateException)
             {
@@ -152,7 +152,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             {
                 Stream? stream = findFileTask.Result;
                 if (stream != null)
-                    return _cache.Store(stream, key);
+                    return _cache.Store(stream, key, MaxDownloadSize);
             }
             catch (AggregateException)
             {

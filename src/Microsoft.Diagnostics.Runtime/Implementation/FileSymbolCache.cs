@@ -119,7 +119,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             }
         }
 
-        internal string Store(Stream stream, string key)
+        internal string Store(Stream stream, string key, long maxSize = 0)
         {
             if (string.IsNullOrWhiteSpace(key))
                 throw new InvalidOperationException($"Cannot store to an empty {nameof(key)}.");
@@ -148,22 +148,53 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 string directory = Path.GetDirectoryName(fullPath)!;
                 Directory.CreateDirectory(directory);
                 using FileStream fs = File.Create(fullPath);
-                stream.CopyTo(fs);
+
+                if (maxSize > 0)
+                    BoundedCopyTo(stream, fs, maxSize);
+                else
+                    stream.CopyTo(fs);
+
                 return fullPath;
             }
-            catch (Exception ex)
+            catch
             {
-                source.SetException(ex);
+                // Delete partial file on failure to avoid leaving corrupt data on disk.
+                try
+                {
+                    if (File.Exists(fullPath))
+                        File.Delete(fullPath);
+                }
+                catch
+                {
+                    // Best-effort cleanup; don't mask the original exception.
+                }
+
                 throw;
             }
             finally
             {
-                source.SetResult(0);
+                source.TrySetResult(0);
 
                 // We don't remove the entry from _writingTo.  If we removed it: We could race between checking if a file
                 // exists and Store, meaning two threads see the file is missing, both attempt to store it, one thread
                 // completes this method and the other will overwrite that file again.  A third thread might see the file
                 // exists and tries to open the half written file.  Better to just 'leak' the path.
+            }
+        }
+
+        private static void BoundedCopyTo(Stream source, Stream destination, long maxSize)
+        {
+            byte[] buffer = new byte[81920];
+            long totalBytes = 0;
+            int bytesRead;
+
+            while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                totalBytes += bytesRead;
+                if (totalBytes > maxSize)
+                    throw new InvalidOperationException($"Download exceeded maximum allowed size of {maxSize:N0} bytes.");
+
+                destination.Write(buffer, 0, bytesRead);
             }
         }
     }
