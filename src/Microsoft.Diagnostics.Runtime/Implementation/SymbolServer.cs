@@ -18,11 +18,23 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
     {
         public static readonly Uri Msdl = new("https://msdl.microsoft.com/download/symbols/");
         public static readonly Uri SymwebHost = new("https://symweb.azurefd.net/");
+
+        /// <summary>
+        /// Default maximum download size: 16 MB. Covers all known legitimate DAC files (typically 5–15 MB).
+        /// </summary>
+        public const long DefaultMaxDownloadSize = 16 * 1024 * 1024;
+
         private readonly TokenCredential? _tokenCredential;
         private AccessToken _accessToken;
         private readonly FileSymbolCache _cache;
         private readonly bool _trace;
         private readonly HttpClient _http = new();
+
+        /// <summary>
+        /// Maximum number of bytes that will be downloaded from the symbol server per file.
+        /// Downloads exceeding this limit are aborted. Default is 16 MB.
+        /// </summary>
+        public long MaxDownloadSize { get; set; } = DefaultMaxDownloadSize;
 
         public Uri Server { get; private set; }
         private bool IsSymweb => Server.Host.Equals(SymwebHost.Host, StringComparison.OrdinalIgnoreCase);
