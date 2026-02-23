@@ -125,6 +125,10 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             if (key == null)
                 return null;
 
+            result = _cache.FindPartialFile(key, MaxDownloadSize);
+            if (result != null)
+                return result;
+
             try
             {
                 Stream? stream = FindFileOnServer(key).Result;
@@ -132,9 +136,6 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                     return _cache.Store(stream, key, MaxDownloadSize);
             }
             catch (AggregateException)
-            {
-            }
-            catch (InvalidOperationException)
             {
             }
 
@@ -151,6 +152,10 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             if (key == null)
                 return null;
 
+            result = _cache.FindPartialFile(key, MaxDownloadSize);
+            if (result != null)
+                return result;
+
             Task<Stream?> findFileTask = FindFileOnServer(key);
             try
             {
@@ -159,9 +164,6 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                     return _cache.Store(stream, key, MaxDownloadSize);
             }
             catch (AggregateException)
-            {
-            }
-            catch (InvalidOperationException)
             {
             }
 
@@ -188,19 +190,12 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 return null;
             }
 
-            // Reject early if Content-Length exceeds the configured limit.
+            // Wrap in a BoundedStream to cap reads at MaxDownloadSize.
+            // If the file is larger, we'll save a .partial in the cache.
             long? contentLength = response.Content.Headers.ContentLength;
-            if (contentLength.HasValue && contentLength.Value > MaxDownloadSize)
-            {
-                if (_trace)
-                    Trace.WriteLine($"ClrMD symbol request: {fullPath} rejected — Content-Length {contentLength.Value:N0} exceeds limit of {MaxDownloadSize:N0} bytes.");
+            if (_trace && contentLength.HasValue && contentLength.Value > MaxDownloadSize)
+                Trace.WriteLine($"ClrMD symbol request: {fullPath} Content-Length {contentLength.Value:N0} exceeds limit of {MaxDownloadSize:N0} bytes; download will be partial.");
 
-                response.Dispose();
-                return null;
-            }
-
-            // Wrap in a BoundedStream to enforce the limit during reads, in case
-            // Content-Length is absent or the server sends more data than declared.
             Stream inner = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             return new BoundedStream(inner, MaxDownloadSize);
         }

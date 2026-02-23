@@ -119,12 +119,29 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             }
         }
 
+        internal string? FindPartialFile(string key, long maxDownloadSize)
+        {
+            if (maxDownloadSize <= 0)
+                return null;
+
+            string fullPath = Path.Combine(Location, key) + ".partial";
+            if (File.Exists(fullPath) && new FileInfo(fullPath).Length >= maxDownloadSize)
+                return fullPath;
+
+            string flatPath = Path.Combine(Location, Path.GetFileName(key)) + ".partial";
+            if (fullPath != flatPath && File.Exists(flatPath) && new FileInfo(flatPath).Length >= maxDownloadSize)
+                return flatPath;
+
+            return null;
+        }
+
         internal string Store(Stream stream, string key, long maxSize = 0)
         {
             if (string.IsNullOrWhiteSpace(key))
                 throw new InvalidOperationException($"Cannot store to an empty {nameof(key)}.");
 
             string fullPath = Path.Combine(Location, key);
+            string partialPath = fullPath + ".partial";
 
             TaskCompletionSource<int> source = new();
             Task? currentWrite = null;
@@ -140,6 +157,13 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 source.SetResult(0);
 
                 currentWrite.Wait();
+
+                if (File.Exists(fullPath))
+                    return fullPath;
+
+                if (File.Exists(partialPath))
+                    return partialPath;
+
                 return fullPath;
             }
 
@@ -147,12 +171,27 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             {
                 string directory = Path.GetDirectoryName(fullPath)!;
                 Directory.CreateDirectory(directory);
-                using FileStream fs = File.Create(fullPath);
 
-                if (maxSize > 0)
-                    BoundedCopyTo(stream, fs, maxSize);
-                else
-                    stream.CopyTo(fs);
+                long totalBytes;
+                using (FileStream fs = File.Create(fullPath))
+                {
+                    if (maxSize > 0)
+                        totalBytes = CopyStream(stream, fs);
+                    else
+                    {
+                        stream.CopyTo(fs);
+                        totalBytes = fs.Length;
+                    }
+                }
+
+                if (maxSize > 0 && totalBytes >= maxSize)
+                {
+                    if (File.Exists(partialPath))
+                        File.Delete(partialPath);
+
+                    File.Move(fullPath, partialPath);
+                    return partialPath;
+                }
 
                 return fullPath;
             }
@@ -182,7 +221,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             }
         }
 
-        private static void BoundedCopyTo(Stream source, Stream destination, long maxSize)
+        private static long CopyStream(Stream source, Stream destination)
         {
             byte[] buffer = new byte[81920];
             long totalBytes = 0;
@@ -190,12 +229,11 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
             while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
             {
-                totalBytes += bytesRead;
-                if (totalBytes > maxSize)
-                    throw new InvalidOperationException($"Download exceeded maximum allowed size of {maxSize:N0} bytes.");
-
                 destination.Write(buffer, 0, bytesRead);
+                totalBytes += bytesRead;
             }
+
+            return totalBytes;
         }
     }
 }

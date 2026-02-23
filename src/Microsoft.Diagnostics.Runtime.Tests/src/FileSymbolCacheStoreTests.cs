@@ -46,7 +46,7 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         }
 
         [Fact]
-        public void StoreExactlyAtMaxSizeSucceeds()
+        public void StoreExactlyAtMaxSizeWritesPartialFile()
         {
             byte[] data = new byte[100];
             new Random(42).NextBytes(data);
@@ -54,23 +54,47 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             using MemoryStream stream = new(data);
             string result = _cache.Store(stream, "test/exact.bin", maxSize: 100);
 
+            Assert.EndsWith(".partial", result);
             Assert.True(File.Exists(result));
             Assert.Equal(data, File.ReadAllBytes(result));
         }
 
         [Fact]
-        public void StoreExceedingMaxSizeThrowsAndDeletesPartialFile()
+        public void StoreExceedingMaxSizeWritesPartialFile()
         {
             byte[] data = new byte[200];
             new Random(42).NextBytes(data);
 
-            string expectedPath = Path.Combine(_tempDir, "test", "oversized.bin");
+            using MemoryStream inner = new(data);
+            using BoundedStream bounded = new(inner, 100);
+            string result = _cache.Store(bounded, "test/oversized.bin", maxSize: 100);
 
-            using MemoryStream stream = new(data);
-            Assert.Throws<InvalidOperationException>(() => _cache.Store(stream, "test/oversized.bin", maxSize: 100));
+            string normalPath = Path.Combine(_tempDir, "test", "oversized.bin");
+            Assert.False(File.Exists(normalPath));
 
-            // Partial file should be cleaned up
-            Assert.False(File.Exists(expectedPath));
+            Assert.EndsWith(".partial", result);
+            Assert.True(File.Exists(result));
+            Assert.Equal(100, new FileInfo(result).Length);
+        }
+
+        [Fact]
+        public void StorePartialOverwritesExisting()
+        {
+            byte[] oldData = new byte[100];
+            new Random(1).NextBytes(oldData);
+            byte[] newData = new byte[100];
+            new Random(2).NextBytes(newData);
+
+            string partialPath = Path.Combine(_tempDir, "test", "overwrite.bin.partial");
+            Directory.CreateDirectory(Path.GetDirectoryName(partialPath)!);
+            File.WriteAllBytes(partialPath, oldData);
+
+            using MemoryStream stream = new(newData);
+            string result = _cache.Store(stream, "test/overwrite.bin", maxSize: 100);
+
+            Assert.EndsWith(".partial", result);
+            Assert.True(File.Exists(result));
+            Assert.Equal(newData, File.ReadAllBytes(result));
         }
 
         [Fact]

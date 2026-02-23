@@ -7,8 +7,8 @@ using System.IO;
 namespace Microsoft.Diagnostics.Runtime.Implementation
 {
     /// <summary>
-    /// A read-only stream wrapper that enforces a maximum number of bytes read.
-    /// Throws <see cref="InvalidOperationException"/> if the limit is exceeded.
+    /// A read-only stream wrapper that caps reads at a maximum number of bytes.
+    /// Returns EOF (0) once the limit is reached.
     /// </summary>
     internal sealed class BoundedStream : Stream
     {
@@ -38,24 +38,30 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            long remaining = _maxBytes - _totalBytesRead;
+            if (remaining <= 0)
+                return 0;
+
+            if (count > remaining)
+                count = (int)remaining;
+
             int bytesRead = _inner.Read(buffer, offset, count);
             _totalBytesRead += bytesRead;
-
-            if (_totalBytesRead > _maxBytes)
-                throw new InvalidOperationException($"Download exceeded maximum allowed size of {_maxBytes:N0} bytes.");
-
             return bytesRead;
         }
 
 #if NET
         public override int Read(Span<byte> buffer)
         {
+            long remaining = _maxBytes - _totalBytesRead;
+            if (remaining <= 0)
+                return 0;
+
+            if (buffer.Length > remaining)
+                buffer = buffer.Slice(0, (int)remaining);
+
             int bytesRead = _inner.Read(buffer);
             _totalBytesRead += bytesRead;
-
-            if (_totalBytesRead > _maxBytes)
-                throw new InvalidOperationException($"Download exceeded maximum allowed size of {_maxBytes:N0} bytes.");
-
             return bytesRead;
         }
 #endif

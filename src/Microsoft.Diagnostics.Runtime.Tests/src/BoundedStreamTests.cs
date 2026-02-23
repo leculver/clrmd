@@ -43,7 +43,7 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         }
 
         [Fact]
-        public void ReadExceedingLimitThrows()
+        public void ReadExceedingLimitCapsAtMaxBytes()
         {
             byte[] data = new byte[200];
             new Random(42).NextBytes(data);
@@ -52,11 +52,14 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             using BoundedStream bounded = new(inner, 100);
 
             byte[] buffer = new byte[200];
-            Assert.Throws<InvalidOperationException>(() => bounded.Read(buffer, 0, buffer.Length));
+            int read = bounded.Read(buffer, 0, buffer.Length);
+
+            Assert.Equal(100, read);
+            Assert.Equal(data.AsSpan(0, 100).ToArray(), buffer.AsSpan(0, 100).ToArray());
         }
 
         [Fact]
-        public void MultipleReadsExceedingLimitThrows()
+        public void MultipleReadsCappedAtMaxBytes()
         {
             byte[] data = new byte[200];
             new Random(42).NextBytes(data);
@@ -70,8 +73,13 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             int read1 = bounded.Read(buffer, 0, buffer.Length);
             Assert.Equal(100, read1);
 
-            // Second read: would bring total to 200, exceeds 150 limit
-            Assert.Throws<InvalidOperationException>(() => bounded.Read(buffer, 0, buffer.Length));
+            // Second read: only 50 bytes remaining within limit
+            int read2 = bounded.Read(buffer, 0, buffer.Length);
+            Assert.Equal(50, read2);
+
+            // Third read: at limit, returns 0
+            int read3 = bounded.Read(buffer, 0, buffer.Length);
+            Assert.Equal(0, read3);
         }
 
         [Fact]
@@ -90,7 +98,7 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         }
 
         [Fact]
-        public void CopyToExceedingLimitThrows()
+        public void CopyToExceedingLimitCapsOutput()
         {
             byte[] data = new byte[200];
             new Random(42).NextBytes(data);
@@ -99,7 +107,10 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             using BoundedStream bounded = new(inner, 100);
             using MemoryStream output = new();
 
-            Assert.Throws<InvalidOperationException>(() => bounded.CopyTo(output));
+            bounded.CopyTo(output);
+
+            Assert.Equal(100, output.Length);
+            Assert.Equal(data.AsSpan(0, 100).ToArray(), output.ToArray());
         }
 
         [Fact]
