@@ -19,16 +19,6 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         public static readonly Uri Msdl = new("https://msdl.microsoft.com/download/symbols/");
         public static readonly Uri SymwebHost = new("https://symweb.azurefd.net/");
 
-        /// <summary>
-        /// Default maximum download size: 16 MB. Covers all known legitimate DAC files (typically 5–15 MB).
-        /// </summary>
-        public const long DefaultMaxDownloadSize = 16 * 1024 * 1024;
-
-        /// <summary>
-        /// Default HTTP timeout for symbol server requests: 180 seconds.
-        /// </summary>
-        public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(180);
-
         private readonly TokenCredential? _tokenCredential;
         private AccessToken _accessToken;
         private readonly FileSymbolCache _cache;
@@ -37,9 +27,9 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         /// <summary>
         /// Maximum number of bytes that will be downloaded from the symbol server per file.
-        /// Downloads exceeding this limit are aborted. Default is 16 MB.
+        /// Downloads exceeding this limit are aborted.
         /// </summary>
-        public long MaxDownloadSize { get; set; } = DefaultMaxDownloadSize;
+        public long MaxDownloadSize { get; }
 
         /// <summary>
         /// Gets the HTTP timeout for symbol server requests.
@@ -49,18 +39,21 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         public Uri Server { get; private set; }
         private bool IsSymweb => Server.Host.Equals(SymwebHost.Host, StringComparison.OrdinalIgnoreCase);
 
-        internal SymbolServer(FileSymbolCache cache, string server, bool trace, TokenCredential? credential, TimeSpan? timeout = null)
-            : this(cache, Sanitize(server), trace, credential, timeout)
+        internal SymbolServer(FileSymbolCache cache, string server, bool trace, TokenCredential? credential, TimeSpan? timeout = null, long maxDownloadSize = 0)
+            : this(cache, Sanitize(server), trace, credential, timeout, maxDownloadSize)
         {
         }
 
-        internal SymbolServer(FileSymbolCache cache, Uri server, bool trace, TokenCredential? credential, TimeSpan? timeout = null)
+        internal SymbolServer(FileSymbolCache cache, Uri server, bool trace, TokenCredential? credential, TimeSpan? timeout = null, long maxDownloadSize = 0)
         {
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _trace = trace;
             Server = EnsureTrailingSlash(server);
             _tokenCredential = credential;
-            _http.Timeout = timeout ?? DefaultTimeout;
+
+            DataTargetLimits defaults = new();
+            _http.Timeout = timeout ?? defaults.SymbolTimeout;
+            MaxDownloadSize = maxDownloadSize > 0 ? maxDownloadSize : defaults.MaxFileDownloadSize;
 
             if (IsSymweb)
                 _tokenCredential ??= new InteractiveBrowserCredential();

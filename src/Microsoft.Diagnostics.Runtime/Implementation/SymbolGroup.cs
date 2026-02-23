@@ -87,7 +87,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             return s_cache!;
         }
 
-        public static IFileLocator CreateFromSymbolPath(string symbolPath, bool trace, TokenCredential? credential, TimeSpan? timeout = null)
+        public static IFileLocator CreateFromSymbolPath(string symbolPath, bool trace, TokenCredential? credential, TimeSpan? timeout = null, long maxDownloadSize = 0)
         {
             FileSymbolCache defaultCache = GetDefaultCache();
             List<IFileLocator> locators = new();
@@ -114,7 +114,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 {
                     if (IsUrl(server))
                     {
-                        SymbolServer symSvr = new(cache, server, trace, credential, timeout);
+                        SymbolServer symSvr = new(cache, server, trace, credential, timeout, maxDownloadSize);
                         locators.Add(symSvr);
 
                         if (first)
@@ -142,7 +142,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 return single;
 
             if (locators.Count == 0)
-                return new SymbolServer(defaultCache, SymbolServer.Msdl, trace, null, timeout);
+                return new SymbolServer(defaultCache, SymbolServer.Msdl, trace, null, timeout, maxDownloadSize);
 
             return new SymbolGroup(locators);
         }

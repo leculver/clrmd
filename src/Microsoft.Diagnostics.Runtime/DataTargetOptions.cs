@@ -34,7 +34,7 @@ public class DataTargetOptions
             {
                 FileSymbolCache cache = new(SymbolCachePath);
                 IEnumerable<SymbolServer> servers = SymbolPaths.Select(r =>
-                                                        new SymbolServer(cache, r, TraceSymbolRequests, SymbolTokenCredential));
+                                                        new SymbolServer(cache, r, TraceSymbolRequests, SymbolTokenCredential, Limits.SymbolTimeout, Limits.MaxFileDownloadSize));
                 field = new SymbolGroup(servers);
                 return field;
             }

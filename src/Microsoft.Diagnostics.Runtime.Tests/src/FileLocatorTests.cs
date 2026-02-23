@@ -43,9 +43,10 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         [Fact]
         public void SymbolServerUsesDefaultTimeout()
         {
+            DataTargetLimits defaults = new();
             FileSymbolCache cache = new(Helpers.TestWorkingDirectory);
             SymbolServer server = new(cache, "http://msdl.microsoft.com/download/symbols", trace: false, credential: null);
-            Assert.Equal(SymbolServer.DefaultTimeout, server.Timeout);
+            Assert.Equal(defaults.SymbolTimeout, server.Timeout);
         }
 
         [Fact]
@@ -76,6 +77,8 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         [Fact]
         public void CreateFromSymbolPathUsesDefaultTimeoutWhenNull()
         {
+            DataTargetLimits defaults = new();
+
             IFileLocator locator = SymbolGroup.CreateFromSymbolPath(
                 string.Empty,
                 trace: false,
@@ -83,7 +86,54 @@ namespace Microsoft.Diagnostics.Runtime.Tests
                 timeout: null);
 
             SymbolServer server = Assert.IsType<SymbolServer>(locator);
-            Assert.Equal(SymbolServer.DefaultTimeout, server.Timeout);
+            Assert.Equal(defaults.SymbolTimeout, server.Timeout);
+        }
+
+        [Fact]
+        public void SymbolServerUsesDefaultMaxDownloadSize()
+        {
+            DataTargetLimits defaults = new();
+            FileSymbolCache cache = new(Helpers.TestWorkingDirectory);
+            SymbolServer server = new(cache, "http://msdl.microsoft.com/download/symbols", trace: false, credential: null);
+            Assert.Equal(defaults.MaxFileDownloadSize, server.MaxDownloadSize);
+        }
+
+        [Fact]
+        public void SymbolServerUsesCustomMaxDownloadSize()
+        {
+            long custom = 32 * 1024 * 1024;
+            FileSymbolCache cache = new(Helpers.TestWorkingDirectory);
+            SymbolServer server = new(cache, "http://msdl.microsoft.com/download/symbols", trace: false, credential: null, maxDownloadSize: custom);
+            Assert.Equal(custom, server.MaxDownloadSize);
+        }
+
+        [Fact]
+        public void DataTargetOptionsWiresLimitsToFileLocator()
+        {
+            DataTargetOptions options = new()
+            {
+                Limits = new DataTargetLimits
+                {
+                    MaxFileDownloadSize = 42 * 1024 * 1024,
+                    SymbolTimeout = TimeSpan.FromSeconds(99)
+                }
+            };
+
+            // Accessing FileLocator triggers lazy creation of SymbolServer instances.
+            IFileLocator locator = options.FileLocator;
+            SymbolGroup group = Assert.IsType<SymbolGroup>(locator);
+
+            // SymbolGroup wraps an array of IFileLocator — the default config creates one SymbolServer.
+            System.Collections.Immutable.ImmutableArray<IFileLocator> groups = GetGroups(group);
+            SymbolServer server = Assert.IsType<SymbolServer>(groups[0]);
+            Assert.Equal(42 * 1024 * 1024, server.MaxDownloadSize);
+            Assert.Equal(TimeSpan.FromSeconds(99), server.Timeout);
+        }
+
+        private static System.Collections.Immutable.ImmutableArray<IFileLocator> GetGroups(SymbolGroup group)
+        {
+            System.Reflection.FieldInfo field = typeof(SymbolGroup).GetField("_groups", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            return (System.Collections.Immutable.ImmutableArray<IFileLocator>)field.GetValue(group)!;
         }
     }
 }

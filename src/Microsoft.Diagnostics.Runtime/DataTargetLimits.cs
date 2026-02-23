@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System;
+
 namespace Microsoft.Diagnostics.Runtime;
 
 /// <summary>
@@ -81,6 +83,23 @@ public sealed class DataTargetLimits
     /// <summary>Maximum number of app domains to enumerate from the runtime.</summary>
     public int MaxAppDomains { get => field; init => field = ValidatePositive(value); } = 10_000;
 
+    // ──────────────────────────────────────────────
+    //  Symbol server limits
+    // ──────────────────────────────────────────────
+
+    /// <summary>Maximum number of bytes that will be downloaded from a symbol server per file.
+    /// Downloads exceeding this limit are aborted. Default is 16 MB.</summary>
+    public long MaxFileDownloadSize { get => field; init => field = ValidatePositiveLong(value); } = 16 * 1024 * 1024;
+
+    /// <summary>HTTP timeout for symbol server requests. Default is 180 seconds.</summary>
+    public TimeSpan SymbolTimeout { get => field; init => field = ValidatePositiveTimeSpan(value); } = TimeSpan.FromSeconds(180);
+
     private static int ValidatePositive(int value) =>
         value > 0 ? value : throw new System.ArgumentOutOfRangeException(nameof(value), "Limit must be a positive integer.");
+
+    private static long ValidatePositiveLong(long value) =>
+        value > 0 ? value : throw new ArgumentOutOfRangeException(nameof(value), "Limit must be a positive integer.");
+
+    private static TimeSpan ValidatePositiveTimeSpan(TimeSpan value) =>
+        value > TimeSpan.Zero ? value : throw new ArgumentOutOfRangeException(nameof(value), "Timeout must be positive.");
 }
