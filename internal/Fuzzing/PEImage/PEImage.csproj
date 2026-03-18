@@ -5,6 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>Microsoft.Diagnostics.Runtime.Fuzzing.PEImage</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)..\..\..\eng\Microsoft.Diagnostics.Runtime.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
   <ItemGroup>
