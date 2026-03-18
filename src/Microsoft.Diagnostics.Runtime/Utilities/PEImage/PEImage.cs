@@ -76,7 +76,7 @@ namespace Microsoft.Diagnostics.Runtime.Utilities
         /// <param name="isVirtual">Whether stream points to a PE image mapped into an address space (such as in a live process or crash dump).</param>
         /// <param name="loadedImageBase">Provide a loaded image base so that the read API based on virtual addresses can be relocated</param>
         /// <param name="limits">Optional safety limits for parsing.</param>
-        private PEImage(Stream stream, bool leaveOpen, bool isVirtual, ulong loadedImageBase, DataTargetLimits? limits = null)
+        internal PEImage(Stream stream, bool leaveOpen, bool isVirtual, ulong loadedImageBase, DataTargetLimits? limits = null)
         {
             _limits = limits ?? new DataTargetLimits();
             _isVirtual = isVirtual;
