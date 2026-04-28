@@ -18,6 +18,29 @@ public unsafe static class AuthenticodeUtil
     private const int WTD_STATEACTION_CLOSE = 0x2;
     private const string DOTNET_DAC_CERT_OID = "1.3.6.1.4.1.311.84.4.1";
 
+    // dwProvFlags for WinVerifyTrust:
+    //   WTD_REVOCATION_CHECK_CHAIN  = 0x40 -- check revocation for the chain (excluding root)
+    //   WTD_REVOKE_WHOLECHAIN       = 0x80 -- whole-chain revocation context
+    //
+    // We intentionally do NOT set WTD_CACHE_ONLY_URL_RETRIEVAL (0x1000).  With that flag a
+    // cached-but-stale "good" CRL/OCSP response (still within NextUpdate) would mask a
+    // freshly-revoked signing cert and verification would silently succeed.  The DAC's
+    // issuing CA further publishes its CRL with NextUpdate == NextCRLPublish, so the
+    // cache-only acceptance window is effectively the entire CRL lifetime.  Allowing the
+    // OS to perform online retrieval means offline hosts get "small delay then fail closed"
+    // rather than "silently accept a revoked cert."
+    //
+    // (LoadLibraryEx + LOAD_LIBRARY_REQUIRE_SIGNED_TARGET was considered as an alternative
+    //  per Matt Galbraith's suggestion, but that flag enforces the kernel CodeIntegrity /
+    //  OS-image-signing policy -- it rejects user-mode-Authenticode-signed binaries like
+    //  mscordaccore.dll with ERROR_INVALID_IMAGE_HASH (0x241).  TOCTOU between verify and
+    //  the subsequent LoadLibrary is mitigated instead by holding `fileLock` open across
+    //  both calls -- see DacLibrary.cs.)
+    //
+    // Exposed `internal` so unit tests can pin this value and prevent regression to
+    // CACHE_ONLY-style flags.
+    internal const uint DwProvFlags = 0x40 | 0x80;
+
     /// <summary>
     /// Verifies the DAC signing and signature
     /// </summary>
@@ -55,7 +78,7 @@ public unsafe static class AuthenticodeUtil
         {
             cbStruct = (uint)sizeof(WINTRUST_DATA),
             dwUIChoice = 2,         // WTD_UI_NONE
-            dwProvFlags = 0x1040,   // WTD_REVOCATION_CHECK_CHAIN | WTD_CACHE_ONLY_URL_RETRIEVAL
+            dwProvFlags = DwProvFlags,
             dwStateAction = 1,      // WTD_STATEACTION_VERIFY
             dwUnionChoice = 1,      // WTD_CHOICE_FILE
             pFile = new IntPtr(&trustInfo)
