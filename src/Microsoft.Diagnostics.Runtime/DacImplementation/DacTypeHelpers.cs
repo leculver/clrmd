@@ -334,6 +334,33 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                 method.Dispose();
             }
 
+            // Fallback: when the DAC's EnumerateMethodInstancesByAddress yields no usable
+            // mapping (e.g. the runtime's LoadedMethodDescIterator hits a partial-read
+            // failure walking AvailableParamTypes for a closed-generic instantiation under
+            // a self-snapshot or self-attach data target) but we still have valid native
+            // code regions, synthesize a single entry per region so that consumers can at
+            // least disassemble the raw bytes. ILOffset = -1 (NO_MAPPING) signals that
+            // the IL-to-native correlation is unknown for this entry. See issue #1334.
+            if (result.Count == 0 && hotCold.HotStart != 0 && hotCold.HotSize != 0)
+            {
+                result.Add(new ILToNativeMap
+                {
+                    ILOffset = -1,
+                    StartAddress = hotCold.HotStart,
+                    EndAddress = hotCold.HotStart + hotCold.HotSize,
+                });
+
+                if (hotCold.ColdStart != 0 && hotCold.ColdSize != 0)
+                {
+                    result.Add(new ILToNativeMap
+                    {
+                        ILOffset = -1,
+                        StartAddress = hotCold.ColdStart,
+                        EndAddress = hotCold.ColdStart + hotCold.ColdSize,
+                    });
+                }
+            }
+
             return result.MoveOrCopyToImmutable();
         }
 
