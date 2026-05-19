@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 
 namespace ClrMD.Stress;
@@ -27,6 +28,15 @@ internal static class Program
                 return 1;
             }
             return Validation.Run(args[1]);
+        }
+
+        // --failfast-test (for smoke-testing dump capture)
+        if (string.Equals(args[0], "--failfast-test", StringComparison.Ordinal))
+        {
+            Console.WriteLine("[failfast-test] calling Environment.FailFast in 100ms...");
+            Thread.Sleep(100);
+            Environment.FailFast("ClrMD stress --failfast-test verifying DOTNET_DbgEnableMiniDump captures");
+            return 99;
         }
 
         string dumpPath = args[0];
