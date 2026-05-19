@@ -99,6 +99,21 @@ internal static class Program
 
         Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery} stats={statsFile ?? "<none>"}");
 
+        // Hard watchdog: if the deadline + 90s elapses, force-exit. The main loop
+        // only checks the deadline between iterations, so a single very slow iteration
+        // (e.g. cold DAC walk on a >5GB dump under heavy lock contention) could hang
+        // past the soft deadline indefinitely. The watchdog converts that into a
+        // clean timeout exit so the outer wrapper can advance to the next dump.
+        int hardTimeoutMs = (timeoutSeconds + 90) * 1000;
+        Thread watchdog = new(() =>
+        {
+            try { Thread.Sleep(hardTimeoutMs); } catch { }
+            try { Log($"[watchdog] hard deadline ({hardTimeoutMs / 1000}s) hit; forcing exit 0"); } catch { }
+            Stats.WriteStatsLine("watchdog-timeout");
+            Environment.Exit(0);
+        }) { IsBackground = true, Name = "Watchdog" };
+        watchdog.Start();
+
         DataTargetOptions options = new()
         {
             UseLockFreeMemoryMapReader = true,
