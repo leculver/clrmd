@@ -36,6 +36,7 @@ namespace Microsoft.Diagnostics.Runtime
         private string? _stressLogFailureReason;
         private bool _stressLogProbed;
         private readonly object _stressLogGate = new();
+        private readonly object _runtimeCacheLock = new();
 
         internal ClrRuntime(ClrInfo clrInfo, IServiceProvider services)
         {
@@ -208,22 +209,29 @@ namespace Microsoft.Diagnostics.Runtime
                 if (!_threads.IsDefault)
                     return _threads;
 
-                IAbstractThreadHelpers? threadHelpers = GetService<IAbstractThreadHelpers>();
-                ImmutableArray<ClrThread>.Builder builder = ImmutableArray.CreateBuilder<ClrThread>();
-
-                int max = DataTarget.Options.Limits.MaxThreads;
-                foreach (ClrThreadInfo data in GetDacRuntime().EnumerateThreads())
+                // Serialize cache population: concurrent DAC EnumerateThreads calls can
+                // truncate each other and the CAS winner's partial result would become
+                // the permanent cached value.
+                lock (_runtimeCacheLock)
                 {
-                    builder.Add(new ClrThread(DataTarget.DataReader, this, threadHelpers, data));
+                    if (!_threads.IsDefault)
+                        return _threads;
 
-                    if (max-- == 0)
-                        break;
+                    IAbstractThreadHelpers? threadHelpers = GetService<IAbstractThreadHelpers>();
+                    ImmutableArray<ClrThread>.Builder builder = ImmutableArray.CreateBuilder<ClrThread>();
+
+                    int max = DataTarget.Options.Limits.MaxThreads;
+                    foreach (ClrThreadInfo data in GetDacRuntime().EnumerateThreads())
+                    {
+                        builder.Add(new ClrThread(DataTarget.DataReader, this, threadHelpers, data));
+
+                        if (max-- == 0)
+                            break;
+                    }
+
+                    _threads = builder.MoveOrCopyToImmutable();
+                    return _threads;
                 }
-
-                ImmutableArray<ClrThread> threads = builder.MoveOrCopyToImmutable();
-                ImmutableInterlocked.InterlockedCompareExchange(ref _threads, threads, _threads);
-
-                return _threads;
             }
         }
 
@@ -285,21 +293,31 @@ namespace Microsoft.Diagnostics.Runtime
             get
             {
                 ClrHeap? heap = _heap;
-                while (heap is null) // Flush can cause a race.
+                if (heap is not null)
+                    return heap;
+
+                // Serialize cache population so we never construct two ClrHeap
+                // instances for the same runtime (each carries its own internal
+                // caches; readers obtaining different heaps would observe
+                // divergent state).
+                lock (_runtimeCacheLock)
                 {
-                    IAbstractHeap? heapHelpers = GetService<IAbstractHeap>();
-                    IAbstractTypeHelpers? typeHelpers = GetService<IAbstractTypeHelpers>();
-
-                    // These are defined as non-nullable but just in case, double check we have a non-null instance.
-                    if (heapHelpers is null || typeHelpers is null)
-                        throw new InvalidDataException("Unable to create a ClrHeap for this runtime. This may indicate that the CLR wasn't fully initialized at the time the dump was taken, or the dump is corrupt or truncated.");
-
-                    heap = new(this, DataTarget.DataReader, heapHelpers, typeHelpers);
-                    Interlocked.CompareExchange(ref _heap, heap, null);
                     heap = _heap;
-                }
+                    if (heap is null)
+                    {
+                        IAbstractHeap? heapHelpers = GetService<IAbstractHeap>();
+                        IAbstractTypeHelpers? typeHelpers = GetService<IAbstractTypeHelpers>();
 
-                return heap;
+                        // These are defined as non-nullable but just in case, double check we have a non-null instance.
+                        if (heapHelpers is null || typeHelpers is null)
+                            throw new InvalidDataException("Unable to create a ClrHeap for this runtime. This may indicate that the CLR wasn't fully initialized at the time the dump was taken, or the dump is corrupt or truncated.");
+
+                        heap = new(this, DataTarget.DataReader, heapHelpers, typeHelpers);
+                        _heap = heap;
+                    }
+
+                    return heap;
+                }
             }
         }
 
@@ -486,13 +504,24 @@ namespace Microsoft.Diagnostics.Runtime
         private DomainAndModules GetAppDomainData()
         {
             DomainAndModules? data = _domainAndModules;
-            if (data is null)
-            {
-                data = InitAppDomainData();
-                _domainAndModules = data;
-            }
+            if (data is not null)
+                return data;
 
-            return data;
+            // Serialize cache population: InitAppDomainData performs heavy DAC
+            // enumeration of AppDomains and Modules. Concurrent callers would
+            // race on the underlying DAC (truncating results) AND the previous
+            // unguarded `_domainAndModules = data` write left the "winner" as
+            // whichever thread happened to assign last.
+            lock (_runtimeCacheLock)
+            {
+                data = _domainAndModules;
+                if (data is null)
+                {
+                    data = InitAppDomainData();
+                    _domainAndModules = data;
+                }
+                return data;
+            }
         }
 
         private DomainAndModules InitAppDomainData()
