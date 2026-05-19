@@ -34,6 +34,7 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
         private IAbstractTypeHelpers? _typeHelper;
 
         private bool _disposed;
+        private readonly object _serviceLock = new();
 
         public DacServiceProvider(ClrInfo clrInfo, DacLibrary library)
         {
@@ -75,8 +76,18 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
 
         public object? GetService(Type serviceType)
         {
+            // Fast path: return already-initialized services without locking.
+            // Lock only when we need to construct a new service singleton so two
+            // racing callers can't each produce their own DacRuntime / DacHeap /
+            // DacTypeHelpers (each with its own caches, which would silently diverge).
             if (serviceType == typeof(IAbstractRuntime))
-                return _runtime ??= new DacRuntime(_clrInfo, _process, _sos, _sos13, _dac.TargetProperties);
+            {
+                IAbstractRuntime? r = _runtime;
+                if (r is not null)
+                    return r;
+                lock (_serviceLock)
+                    return _runtime ??= new DacRuntime(_clrInfo, _process, _sos, _sos13, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractHeap))
             {
@@ -84,35 +95,84 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                 if (heap is not null)
                     return heap;
 
-                if (_sos.GetGCHeapData(out GCInfo data) && _sos.GetCommonMethodTables(out CommonMethodTables mts) && !mts.ObjectMethodTable.IsNull)
-                    return _heapHelper = new DacHeap(_sos, _sos8, _sos12, _sos16, _dataReader, _dac.TargetProperties, data, mts);
+                lock (_serviceLock)
+                {
+                    heap = _heapHelper;
+                    if (heap is not null)
+                        return heap;
 
-                return null;
+                    if (_sos.GetGCHeapData(out GCInfo data) && _sos.GetCommonMethodTables(out CommonMethodTables mts) && !mts.ObjectMethodTable.IsNull)
+                        return _heapHelper = new DacHeap(_sos, _sos8, _sos12, _sos16, _dataReader, _dac.TargetProperties, data, mts);
+
+                    return null;
+                }
             }
 
             if (serviceType == typeof(IAbstractTypeHelpers))
             {
-                _moduleHelper ??= new(_sos, _dac.TargetProperties);
-                return _typeHelper ??= new DacTypeHelpers(_process, _sos, _sos6, _sos8, _sos14, _dataReader, _moduleHelper, _dac.TargetProperties);
+                IAbstractTypeHelpers? t = _typeHelper;
+                if (t is not null)
+                    return t;
+                lock (_serviceLock)
+                {
+                    _moduleHelper ??= new(_sos, _dac.TargetProperties);
+                    return _typeHelper ??= new DacTypeHelpers(_process, _sos, _sos6, _sos8, _sos14, _dataReader, _moduleHelper, _dac.TargetProperties);
+                }
             }
 
             if (serviceType == typeof(IAbstractClrNativeHeaps))
-                return _nativeHeaps ??= new DacNativeHeaps(_clrInfo, _sos, _sos13, _dataReader, _dac.TargetProperties);
+            {
+                IAbstractClrNativeHeaps? n = _nativeHeaps;
+                if (n is not null)
+                    return n;
+                lock (_serviceLock)
+                    return _nativeHeaps ??= new DacNativeHeaps(_clrInfo, _sos, _sos13, _dataReader, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractModuleHelpers))
-                return _moduleHelper ??= new DacModuleHelpers(_sos, _dac.TargetProperties);
+            {
+                DacModuleHelpers? m = _moduleHelper;
+                if (m is not null)
+                    return m;
+                lock (_serviceLock)
+                    return _moduleHelper ??= new DacModuleHelpers(_sos, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractComHelpers))
-                return _com ??= new DacComHelpers(_sos, _dac.TargetProperties);
+            {
+                IAbstractComHelpers? c = _com;
+                if (c is not null)
+                    return c;
+                lock (_serviceLock)
+                    return _com ??= new DacComHelpers(_sos, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractLegacyThreadPool))
-                return _threadPool ??= new DacLegacyThreadPool(_sos, _dac.TargetProperties);
+            {
+                IAbstractLegacyThreadPool? p = _threadPool;
+                if (p is not null)
+                    return p;
+                lock (_serviceLock)
+                    return _threadPool ??= new DacLegacyThreadPool(_sos, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractMethodLocator))
-                return _methodLocator ??= new DacMethodLocator(_sos, _dataReader, _dac.TargetProperties);
+            {
+                IAbstractMethodLocator? l = _methodLocator;
+                if (l is not null)
+                    return l;
+                lock (_serviceLock)
+                    return _methodLocator ??= new DacMethodLocator(_sos, _dataReader, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractThreadHelpers))
-                return _threadHelper ??= new DacThreadHelpers(_process, _sos, _dataReader, _dac.TargetProperties);
+            {
+                IAbstractThreadHelpers? th = _threadHelper;
+                if (th is not null)
+                    return th;
+                lock (_serviceLock)
+                    return _threadHelper ??= new DacThreadHelpers(_process, _sos, _dataReader, _dac.TargetProperties);
+            }
 
             if (serviceType == typeof(IAbstractDacController))
                 return this;
