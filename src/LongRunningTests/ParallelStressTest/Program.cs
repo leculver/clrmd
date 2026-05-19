@@ -1,171 +1,199 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Microsoft.Diagnostics.Runtime;
-using Microsoft.Diagnostics.Runtime.Implementation;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
-using System.Threading;
+using Microsoft.Diagnostics.Runtime;
 
-namespace ParallelStressTest
+namespace ClrMD.Stress;
+
+internal static class Program
 {
-    static class Program
+    private const int DefaultDataTargetTeardownEvery = 5;
+
+    private static int Main(string[] args)
     {
-        const bool BackgroundClear = true;
-        const int Iterations = int.MaxValue;
-        const int Threads = 8;
-        static readonly object _sync = new object();
-        private static ClrObject[] _expectedObjects;
-        private static ClrSegment[] _segments;
-        private static readonly ManualResetEvent _event = new ManualResetEvent(initialState: false);
-
-        private static volatile ClrRuntime _runtimeForClearing;
-
-        static void Main(string[] args)
+        if (args.Length == 0)
         {
-            if (args.Length != 1)
-            {
-                Console.WriteLine("Must specify a crash dump to inspect.");
+            PrintUsage();
+            return 1;
+        }
 
-                if (Debugger.IsAttached)
-                    Debugger.Break();
-                Environment.Exit(1);
+        // --validate <dump>
+        if (string.Equals(args[0], "--validate", StringComparison.Ordinal))
+        {
+            if (args.Length != 2)
+            {
+                PrintUsage();
+                return 1;
             }
+            return Validation.Run(args[1]);
+        }
 
-            using DataTarget dt = DataTarget.LoadDump(args[0]);
-            using (ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime())
+        string dumpPath = args[0];
+        int timeoutSeconds = 7 * 60 + 30;   // default 7.5 min; outer script always passes --timeout
+        int totalThreads = Environment.ProcessorCount;
+        int dataTargetTeardownEvery = DefaultDataTargetTeardownEvery;
+
+        for (int i = 1; i < args.Length; i++)
+        {
+            switch (args[i])
             {
-                _expectedObjects = runtime.Heap.EnumerateObjects().ToArray();
-                _segments = runtime.Heap.Segments.ToArray();
-            }
-
-            if (BackgroundClear)
-            {
-                Thread t = new Thread(ClearThreadProc);
-                t.Start();
-            }
-
-            TimeSpan elapsed = default;
-            for (int i = 0; i < Iterations; i++)
-            {
-                Console.Write($"\rIteration: {i + 1:n0} {elapsed}");
-
-                dt.DataReader.FlushCachedData();
-                using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
-
-                lock (_sync)
-                    _runtimeForClearing = runtime;
-
-                Thread[] threads = new Thread[Threads];
-
-                for (int j = 0; j < Threads; j++)
-                    threads[j] = CreateAndStartThread(runtime);
-
-                Stopwatch sw = new Stopwatch();
-                sw.Start();
-                _event.Set();
-
-                foreach (Thread thread in threads)
-                    thread.Join();
-
-                sw.Stop();
-                elapsed = sw.Elapsed;
-
-                lock (_sync)
-                    _runtimeForClearing = null;
-
-                _event.Reset();
+                case "--timeout":
+                    if (i + 1 >= args.Length || !int.TryParse(args[++i], out timeoutSeconds))
+                    {
+                        Console.Error.WriteLine("--timeout requires an integer (seconds)");
+                        return 1;
+                    }
+                    break;
+                case "--threads":
+                    if (i + 1 >= args.Length || !int.TryParse(args[++i], out totalThreads))
+                    {
+                        Console.Error.WriteLine("--threads requires an integer");
+                        return 1;
+                    }
+                    break;
+                case "--dt-reload-every":
+                    if (i + 1 >= args.Length || !int.TryParse(args[++i], out dataTargetTeardownEvery))
+                    {
+                        Console.Error.WriteLine("--dt-reload-every requires an integer");
+                        return 1;
+                    }
+                    break;
+                default:
+                    Console.Error.WriteLine($"Unknown argument: {args[i]}");
+                    PrintUsage();
+                    return 1;
             }
         }
 
-        private static void ClearThreadProc()
+        if (!File.Exists(dumpPath))
         {
-            while (true)
+            Console.Error.WriteLine($"Dump not found: {dumpPath}");
+            return 1;
+        }
+
+        Failure.DumpPath = dumpPath;
+        Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery}");
+
+        DataTargetOptions options = new() { UseLockFreeMemoryMapReader = true };
+
+        DataTarget dt;
+        Golden[] goldens;
+        try
+        {
+            dt = DataTarget.LoadDump(dumpPath, options);
+        }
+        catch (Exception ex)
+        {
+            Log($"[fatal]  failed to load dump: {ex.GetType().Name}: {ex.Message}");
+            return 4;
+        }
+
+        try
+        {
+            goldens = Goldens.Compute(dt, Log);
+        }
+        catch (Exception ex)
+        {
+            Log($"[fatal]  computing goldens threw {ex.GetType().Name}: {ex.Message}");
+            dt.Dispose();
+            return 4;
+        }
+
+        if (goldens.Length == 0)
+        {
+            Log("[fatal]  no working ClrVersions; exiting 2 so outer script deletes the dump");
+            dt.Dispose();
+            return 2;
+        }
+
+        // Main parallel-stress loop.
+        Stopwatch sw = Stopwatch.StartNew();
+        int iteration = 0;
+        long deadlineMs = (long)timeoutSeconds * 1000;
+        while (sw.ElapsedMilliseconds < deadlineMs)
+        {
+            iteration++;
+            Failure.CurrentIteration = iteration;
+
+            // Recreate ClrRuntimes for the working CLR indices.
+            ClrRuntime[] runtimes = new ClrRuntime[goldens.Length];
+            try
             {
-                lock (_sync)
+                for (int i = 0; i < goldens.Length; i++)
+                    runtimes[i] = dt.ClrVersions[goldens[i].ClrIndex].CreateRuntime();
+            }
+            catch (Exception ex)
+            {
+                // Runtime creation should NOT throw if it worked during goldens computation.
+                // Anything but an OOM here is suspicious and worth a FailFast.
+                if (ex is OutOfMemoryException)
                 {
-                    if (_runtimeForClearing != null)
-                        _runtimeForClearing.FlushCachedData();
+                    Log($"[oom]    iteration {iteration}: {ex.Message}");
+                    Cleanup(runtimes);
+                    dt.Dispose();
+                    return 3;
                 }
-
-                Thread.Sleep(500);
+                Failure.Fail("CreateRuntime", null, "ClrRuntime creation failed after succeeding during golden computation", ex);
             }
-        }
 
-        private static Thread CreateAndStartThread(ClrRuntime runtime)
-        {
-            Thread t = new Thread(() => WorkerThread(runtime));
-            t.Start();
-
-            return t;
-        }
-
-        private static void WorkerThread(ClrRuntime runtime)
-        {
-            //ClrmdHeap.LogHeapWalkSteps(32);
-
-            _event.WaitOne();
-
-            if (_segments.Length != runtime.Heap.Segments.Length)
+            Stopwatch iter = Stopwatch.StartNew();
+            try
             {
-                Fail(false, $"Segment count mismatch.  Expected {_segments.Length} segments, found {runtime.Heap.Segments.Length}.");
+                WorkerPool.RunOnce(runtimes, goldens, totalThreads);
             }
-
-            for (int i = 0; i < _segments.Length; i++)
-                if (runtime.Heap.Segments[i].ObjectRange.Start != _segments[i].ObjectRange.Start)
-                    Fail(false, $"Segment[{i}] range {runtime.Heap.Segments[i].ObjectRange}, expected {_segments[i].ObjectRange}");
-
-            int count = 0;
-            IEnumerator<ClrObject> enumerator = runtime.Heap.EnumerateObjects().GetEnumerator();
-            while (enumerator.MoveNext())
+            finally
             {
-                ClrObject curr = enumerator.Current;
-                if (curr.Address != _expectedObjects[count].Address)
-                    Fail(true, $"Object {count} was incorrect address: Expected {_expectedObjects[count].Address:x12}, got {curr.Address:x12}");
-
-                if (curr.Type != _expectedObjects[count].Type)
-                    Fail(true, $"Object {count} was incorrect type: Expected {_expectedObjects[count].Type.Name}, got {curr.Type?.Name ?? ""}");
-
-                count++;
+                Cleanup(runtimes);
             }
 
-            if (count != _expectedObjects.Count())
-                Fail(true, $"Expected {_expectedObjects.Length:n0} objects, found {count:n0}.");
-        }
-
-        private static void Fail(bool printHeapSteps, string reason)
-        {
-            lock (_sync)
+            // Periodic DataTarget reload to exercise full teardown of the MMF reader.
+            if (dataTargetTeardownEvery > 0 && iteration % dataTargetTeardownEvery == 0)
             {
-                Console.WriteLine();
-                Console.WriteLine($"Thread {Thread.CurrentThread.ManagedThreadId:x}");
-                Console.WriteLine(reason);
-
-                //if (printHeapSteps)
-                //{
-                //    int i = ClrmdHeap.Step;
-                //    do
-                //    {
-                //        i = (i + 1) % ClrmdHeap.Steps.Count;
-                //        HeapWalkStep step = ClrmdHeap.Steps[i];
-                //        Console.WriteLine($"obj:{step.Address:x12} mt:{step.MethodTable:x12} base:{step.BaseSize:x8} comp:{step.ComponentSize:x8} count:{step.Count:x8}");
-                //    } while (i != ClrmdHeap.Step);
-                //}
+                dt.Dispose();
+                try
+                {
+                    dt = DataTarget.LoadDump(dumpPath, options);
+                }
+                catch (Exception ex)
+                {
+                    Log($"[fatal]  DataTarget reload failed: {ex.GetType().Name}: {ex.Message}");
+                    return 4;
+                }
+                Log($"[reload] iteration {iteration}: DataTarget reloaded");
             }
 
-            Break();
+            // Also flush from the outside so back-to-back iterations don't share too much state.
+            dt.DataReader.FlushCachedData();
+
+            Log($"[iter]   {iteration} in {iter.Elapsed.TotalSeconds:F2}s (total {sw.Elapsed.TotalMinutes:F1}m / {timeoutSeconds / 60.0:F1}m)");
         }
 
+        Log($"[done]   {iteration} iterations in {sw.Elapsed.TotalMinutes:F2} min; clean exit");
+        dt.Dispose();
+        return 0;
+    }
 
-        private static void Break()
+    private static void Cleanup(ClrRuntime[] runtimes)
+    {
+        for (int i = 0; i < runtimes.Length; i++)
         {
-            if (Debugger.IsAttached)
-                Debugger.Break();
-
-            while (!Debugger.IsAttached)
-                Thread.Sleep(1000);
+            try { runtimes[i]?.Dispose(); }
+            catch { /* dispose-time errors aren't a stress test failure on their own */ }
+            runtimes[i] = null!;
         }
+    }
+
+    private static void Log(string msg)
+    {
+        Console.WriteLine($"{DateTime.Now:HH:mm:ss.fff}  {msg}");
+        Console.Out.Flush();
+    }
+
+    private static void PrintUsage()
+    {
+        Console.Error.WriteLine("Usage:");
+        Console.Error.WriteLine("  stress.exe <dump-path> [--timeout SECS] [--threads N] [--dt-reload-every N]");
+        Console.Error.WriteLine("  stress.exe --validate <dump-path>");
     }
 }
