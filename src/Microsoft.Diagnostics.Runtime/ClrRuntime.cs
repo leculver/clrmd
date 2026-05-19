@@ -26,6 +26,7 @@ namespace Microsoft.Diagnostics.Runtime
         private volatile ClrHeap? _heap;
         private ImmutableArray<ClrThread> _threads;
         private volatile DomainAndModules? _domainAndModules;
+        private ImmutableArray<ClrHandle> _handles;
 
         private IAbstractRuntime? _runtime;
         private IAbstractComHelpers? _comHelpers;
@@ -62,6 +63,7 @@ namespace Microsoft.Diagnostics.Runtime
             _controller.Flush();
             _domainAndModules = null;
             _threads = default;
+            _handles = default;
             _heap = null;
 
             lock (_stressLogGate)
@@ -283,7 +285,28 @@ namespace Microsoft.Diagnostics.Runtime
         /// depending on the state of the process when we attempt to walk the handle table.
         /// </summary>
         /// <returns>An enumeration of GC handles in the process.</returns>
-        public IEnumerable<ClrHandle> EnumerateHandles() => GetDacRuntime().EnumerateHandles().Select(r => new ClrHandle(this, r));
+        public IEnumerable<ClrHandle> EnumerateHandles()
+        {
+            if (!_handles.IsDefault)
+                return _handles;
+
+            // Serialize cache population: SOSDac.EnumerateHandles is a stateful DAC
+            // enumerator and concurrent calls on the same SOSDac can return truncated
+            // (or wildly wrong) results, manifesting as off-by-one or order-of-magnitude
+            // root-count mismatches during parallel EnumerateRoots() calls.
+            lock (_runtimeCacheLock)
+            {
+                if (!_handles.IsDefault)
+                    return _handles;
+
+                ImmutableArray<ClrHandle>.Builder builder = ImmutableArray.CreateBuilder<ClrHandle>();
+                foreach (ClrHandleInfo info in GetDacRuntime().EnumerateHandles())
+                    builder.Add(new ClrHandle(this, info));
+
+                _handles = builder.MoveOrCopyToImmutable();
+                return _handles;
+            }
+        }
 
         /// <summary>
         /// Gets the GC heap of the process.
