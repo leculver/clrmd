@@ -41,6 +41,12 @@ namespace Microsoft.Diagnostics.Runtime.DacInterface
             _library = lib;
         }
 
+        /// <summary>
+        /// Process-wide lock that serializes stateful DAC enumerations (stack walks, etc.).
+        /// See <see cref="DacLibrary.SyncRoot"/> for the rationale.
+        /// </summary>
+        internal object SyncRoot => _library.SyncRoot;
+
         public RejitData[] GetRejitData(ClrDataAddress md, ClrDataAddress ip = default)
         {
             HResult hr = VTable.GetMethodDescData(Self, md.ToInteropAddress(), ip.ToInteropAddress(), out _, 0, null, out int needed);

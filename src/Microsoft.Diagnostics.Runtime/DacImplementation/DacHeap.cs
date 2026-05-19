@@ -80,19 +80,30 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
 
         public IEnumerable<(ulong Source, ulong Target)> EnumerateDependentHandles()
         {
-            using SOSHandleEnum? handleEnum = _sos.EnumerateHandles(ClrHandleKind.Dependent);
-            if (handleEnum is null)
-                yield break;
-
-            foreach (HandleData handle in handleEnum.ReadHandles())
+            // SOSHandleEnum is a stateful DAC enumerator; serialize its lifetime
+            // against other DAC calls (Flush, other enumerators).
+            List<(ulong Source, ulong Target)>? results = null;
+            lock (_sos.SyncRoot)
             {
-                if (handle.Type == (int)ClrHandleKind.Dependent)
+                using SOSHandleEnum? handleEnum = _sos.EnumerateHandles(ClrHandleKind.Dependent);
+                if (handleEnum is null)
+                    return Array.Empty<(ulong, ulong)>();
+
+                foreach (HandleData handle in handleEnum.ReadHandles())
                 {
-                    ulong obj = _memoryReader.ReadPointer(handle.Handle.ToAddress(_target));
-                    if (obj != 0)
-                        yield return (obj, handle.Secondary.ToAddress(_target));
+                    if (handle.Type == (int)ClrHandleKind.Dependent)
+                    {
+                        ulong obj = _memoryReader.ReadPointer(handle.Handle.ToAddress(_target));
+                        if (obj != 0)
+                        {
+                            results ??= new List<(ulong, ulong)>();
+                            results.Add((obj, handle.Secondary.ToAddress(_target)));
+                        }
+                    }
                 }
             }
+
+            return (IEnumerable<(ulong, ulong)>?)results ?? Array.Empty<(ulong, ulong)>();
         }
 
         public IEnumerable<SyncBlockInfo> EnumerateSyncBlocks()

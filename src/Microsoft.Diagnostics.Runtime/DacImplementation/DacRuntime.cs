@@ -157,23 +157,34 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
 
         public IEnumerable<ClrHandleInfo> EnumerateHandles()
         {
-            using SOSHandleEnum? handleEnum = _sos.EnumerateHandles();
-            if (handleEnum is null)
-                yield break;
-
-            foreach (HandleData handle in handleEnum.ReadHandles())
+            // SOSHandleEnum is a stateful DAC enumerator. Concurrent enumerations
+            // share internal DAC state and can truncate each other. Materialize the
+            // entire enumeration under the DAC lock so the enumerator's lifetime
+            // (creation, iteration, dispose) is fully serialized.
+            List<ClrHandleInfo>? results = null;
+            lock (_sos.SyncRoot)
             {
-                ulong handleAddr = handle.Handle.ToAddress(_target);
-                yield return new ClrHandleInfo()
+                using SOSHandleEnum? handleEnum = _sos.EnumerateHandles();
+                if (handleEnum is null)
+                    return Array.Empty<ClrHandleInfo>();
+
+                foreach (HandleData handle in handleEnum.ReadHandles())
                 {
-                    Address = handleAddr,
-                    Object = _dataReader.ReadPointer(handleAddr),
-                    Kind = (ClrHandleKind)handle.Type,
-                    AppDomain = handle.AppDomain.ToAddress(_target),
-                    DependentTarget = handle.Secondary.ToAddress(_target),
-                    RefCount = handle.IsPegged != 0 ? handle.JupiterRefCount : handle.RefCount,
-                };
+                    ulong handleAddr = handle.Handle.ToAddress(_target);
+                    results ??= new List<ClrHandleInfo>();
+                    results.Add(new ClrHandleInfo()
+                    {
+                        Address = handleAddr,
+                        Object = _dataReader.ReadPointer(handleAddr),
+                        Kind = (ClrHandleKind)handle.Type,
+                        AppDomain = handle.AppDomain.ToAddress(_target),
+                        DependentTarget = handle.Secondary.ToAddress(_target),
+                        RefCount = handle.IsPegged != 0 ? handle.JupiterRefCount : handle.RefCount,
+                    });
+                }
             }
+
+            return (IEnumerable<ClrHandleInfo>?)results ?? Array.Empty<ClrHandleInfo>();
         }
 
         public IEnumerable<JitManagerInfo> EnumerateClrJitManagers()
