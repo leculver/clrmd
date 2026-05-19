@@ -26,6 +26,7 @@ internal static class Validation
         DataTargetOptions opts = new()
         {
             UseLockFreeMemoryMapReader = true,
+            VerifyDacOnWindows = false,
         };
 
         DataTarget dt;

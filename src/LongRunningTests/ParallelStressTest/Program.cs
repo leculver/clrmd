@@ -89,7 +89,11 @@ internal static class Program
 
         Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery} stats={statsFile ?? "<none>"}");
 
-        DataTargetOptions options = new() { UseLockFreeMemoryMapReader = true };
+        DataTargetOptions options = new()
+        {
+            UseLockFreeMemoryMapReader = true,
+            VerifyDacOnWindows = false,
+        };
 
         DataTarget dt;
         Golden[] goldens;
