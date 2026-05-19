@@ -22,7 +22,7 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
         private readonly IMemoryReader _memoryReader;
         private readonly TargetProperties _target;
         private readonly GCState _gcState;
-        private HashSet<ulong>? _validMethodTables;
+        private readonly HashSet<ulong> _validMethodTables = new();
 
         private const uint SyncBlockRecLevelMask = 0x0000FC00;
         private const int SyncBlockRecLevelShift = 10;
@@ -392,7 +392,7 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
             // clear the mark bit
             mt &= ~1ul;
 
-            HashSet<ulong> validMts = _validMethodTables ??= new();
+            HashSet<ulong> validMts = _validMethodTables;
             lock (validMts)
                 if (validMts.Contains(mt))
                     return true;
