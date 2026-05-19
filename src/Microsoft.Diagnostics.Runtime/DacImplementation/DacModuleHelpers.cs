@@ -108,7 +108,7 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                 }
             }
 
-            DacMetadataReader? result = import != null ? new(import) : null;
+            DacMetadataReader? result = import != null ? new(import, _sos.SyncRoot) : null;
             lock (_imports)
             {
                 try

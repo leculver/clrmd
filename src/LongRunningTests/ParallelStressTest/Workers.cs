@@ -90,11 +90,17 @@ internal static class WorkerPool
         // Split threads across runtimes (at least 4 per runtime).
         int perRuntime = Math.Max(4, totalThreads / runtimes.Length);
 
+        // ClrRuntime.FlushCachedData() is documented as a single-threaded operation:
+        // "After calling this function, you must discard ALL ClrMD objects you have
+        // cached other than DataTarget and ClrRuntime." Calling it concurrently with
+        // running queries violates that contract — DacMetadataReader instances get
+        // disposed while workers still hold references, leading to use-after-free AVs
+        // in mscordacwks!RegMeta::GetFieldProps. Cache-flush behavior is still exercised
+        // because Program.RunOnce disposes the ClrRuntime every iteration (and the
+        // DataTarget every few iterations), so the next pass starts cold.
         using ManualResetEventSlim gate = new(initialState: false);
-        using CancellationTokenSource flusherStop = new();
 
         List<Thread> threads = new();
-        List<Thread> flushers = new();
 
         for (int ri = 0; ri < runtimes.Length; ri++)
         {
@@ -123,24 +129,12 @@ internal static class WorkerPool
                 t.Start();
                 threads.Add(t);
             }
-
-            Thread flusher = new(() => FlusherLoop(runtime, flusherStop.Token))
-            {
-                IsBackground = true,
-                Name = $"stress-clr{golden.ClrIndex}-flusher",
-            };
-            flusher.Start();
-            flushers.Add(flusher);
         }
 
         gate.Set();
 
         foreach (Thread t in threads)
             t.Join();
-
-        flusherStop.Cancel();
-        foreach (Thread f in flushers)
-            f.Join();
     }
 
     private static WorkerKind DistributeKind(int threadIndex, int perRuntime)
@@ -265,26 +259,5 @@ internal static class WorkerPool
 
         Interlocked.Add(ref Stats.BfsReachableVisited, reachable);
         Interlocked.Increment(ref Stats.BfsWorkerRuns);
-    }
-
-    private static void FlusherLoop(ClrRuntime runtime, CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                if (ct.WaitHandle.WaitOne(500))
-                    return;
-                runtime.FlushCachedData();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                Failure.Fail("Flusher", null, "unexpected exception in cache flusher", ex);
-            }
-        }
     }
 }
