@@ -113,6 +113,149 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             Assert.True(direct.TryGetDirectSpan(0xBAADF00DBAADF00D, 0, out span));
             Assert.Equal(0, span.Length);
         }
+
+        [WindowsFact]
+        public void LockFreeMmfDataReader_IsThreadSafe()
+        {
+            using DataTarget dt = TestTargets.NestedException.LoadFullDump(
+                options: DataReaderKind.LockFreeMmf.ToOptions());
+
+            Assert.True(dt.DataReader.IsThreadSafe);
+        }
+
+        [WindowsFact]
+        public void LockFreeMmfDataReader_ConcurrentReads_MatchSerialReads()
+        {
+            using DataTarget dt = TestTargets.NestedException.LoadFullDump(
+                options: DataReaderKind.LockFreeMmf.ToOptions());
+
+            Assert.True(dt.DataReader.IsThreadSafe);
+
+            using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
+
+            // Build a baseline (address, length, expected bytes) tuple set serially. Each
+            // parallel worker will replay reads against the same addresses and assert it
+            // gets the same bytes back.
+            List<(ulong Address, byte[] Expected)> baseline = new();
+            foreach (ClrObject obj in runtime.Heap.EnumerateObjects())
+            {
+                if (obj.Address == 0)
+                    continue;
+
+                ulong size = obj.Size;
+                if (size == 0 || size > 4096)
+                    continue;
+
+                int len = (int)size;
+                byte[] buf = new byte[len];
+                if (dt.DataReader.Read(obj.Address, buf) != len)
+                    continue;
+
+                baseline.Add((obj.Address, buf));
+                if (baseline.Count >= 2000)
+                    break;
+            }
+
+            Assert.True(baseline.Count > 100, $"fixture too small for a stress test (got {baseline.Count})");
+
+            // Each thread iterates the baseline in a different order to maximize stripe
+            // contention and force segment-cache misses.
+            int threadCount = Math.Max(4, Environment.ProcessorCount);
+            int iterations = 4;
+            System.Collections.Concurrent.ConcurrentQueue<Exception> failures = new();
+
+            System.Threading.Tasks.Parallel.For(0, threadCount, threadIndex =>
+            {
+                try
+                {
+                    Random rng = new(threadIndex * 17 + 1);
+                    byte[] scratch = new byte[4096];
+
+                    for (int iter = 0; iter < iterations; iter++)
+                    {
+                        for (int i = 0; i < baseline.Count; i++)
+                        {
+                            // Permute the order per-thread. Use unchecked arithmetic since
+                            // we only want bit-mixing, not a meaningful integer result.
+                            int idx;
+                            unchecked
+                            {
+                                idx = ((i * (rng.Next() | 1)) + threadIndex * 31) & 0x7fffffff;
+                            }
+                            idx %= baseline.Count;
+
+                            (ulong addr, byte[] expected) = baseline[idx];
+                            Span<byte> slice = scratch.AsSpan(0, expected.Length);
+                            int read = dt.DataReader.Read(addr, slice);
+                            Assert.Equal(expected.Length, read);
+                            Assert.True(slice.SequenceEqual(expected),
+                                $"thread {threadIndex} got divergent bytes for address {addr:x}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Enqueue(ex);
+                }
+            });
+
+            if (!failures.IsEmpty)
+                throw new Xunit.Sdk.XunitException("concurrent read mismatch: " + failures.ToArray()[0]);
+        }
+
+        [WindowsFact]
+        public void LockFreeMmfDataReader_ConcurrentDirectSpan_MatchesRead()
+        {
+            using DataTarget dt = TestTargets.NestedException.LoadFullDump(
+                options: DataReaderKind.LockFreeMmf.ToOptions());
+
+            ISegmentedDirectMemoryAccess direct = Assert.IsAssignableFrom<ISegmentedDirectMemoryAccess>(dt.DataReader);
+            using ClrRuntime runtime = dt.ClrVersions.Single().CreateRuntime();
+
+            List<(ulong Address, byte[] Expected)> baseline = new();
+            foreach (ClrObject obj in runtime.Heap.EnumerateObjects())
+            {
+                if (obj.Address == 0)
+                    continue;
+
+                ulong size = obj.Size;
+                if (size == 0 || size > 4096)
+                    continue;
+
+                int len = (int)size;
+                if (!direct.TryGetDirectSpan(obj.Address, len, out ReadOnlySpan<byte> span))
+                    continue;
+
+                baseline.Add((obj.Address, span.ToArray()));
+                if (baseline.Count >= 1000)
+                    break;
+            }
+
+            Assert.True(baseline.Count > 50, $"fixture too small (got {baseline.Count})");
+
+            int threadCount = Math.Max(4, Environment.ProcessorCount);
+            System.Collections.Concurrent.ConcurrentQueue<Exception> failures = new();
+
+            System.Threading.Tasks.Parallel.For(0, threadCount, threadIndex =>
+            {
+                try
+                {
+                    foreach ((ulong addr, byte[] expected) in baseline)
+                    {
+                        Assert.True(direct.TryGetDirectSpan(addr, expected.Length, out ReadOnlySpan<byte> span));
+                        Assert.True(span.SequenceEqual(expected),
+                            $"thread {threadIndex} got divergent direct-span bytes for address {addr:x}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures.Enqueue(ex);
+                }
+            });
+
+            if (!failures.IsEmpty)
+                throw new Xunit.Sdk.XunitException("concurrent direct-span mismatch: " + failures.ToArray()[0]);
+        }
     }
 }
 
