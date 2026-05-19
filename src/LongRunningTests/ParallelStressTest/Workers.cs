@@ -30,10 +30,13 @@ internal enum WorkerKind
 /// </summary>
 internal static class BfsReachability
 {
-    public static int Walk(ClrHeap heap, ulong[] roots)
+    public static int Walk(ClrHeap heap, ulong[] roots) => Walk(heap, roots, countRefs: false);
+
+    public static int Walk(ClrHeap heap, ulong[] roots, bool countRefs)
     {
         HashSet<ulong> seen = new();
         Stack<ulong> todo = new();
+        long refsExpanded = 0;
         foreach (ulong r in roots)
             todo.Push(r);
 
@@ -52,10 +55,14 @@ internal static class BfsReachability
 
             foreach (ClrObject child in obj.EnumerateReferences(carefully: false, considerDependantHandles: true))
             {
+                refsExpanded++;
                 if (child.Address != 0 && !seen.Contains(child.Address))
                     todo.Push(child.Address);
             }
         }
+
+        if (countRefs)
+            Interlocked.Add(ref Stats.BfsRefsExpanded, refsExpanded);
 
         return seen.Count;
     }
@@ -225,6 +232,9 @@ internal static class WorkerPool
             Failure.Fail("HeapEnumerator", golden.ClrIndex,
                 $"object count mismatch: expected {golden.Objects.Length:n0}, got {count:n0}");
         }
+
+        Interlocked.Add(ref Stats.HeapObjectsWalked, count);
+        Interlocked.Increment(ref Stats.HeapWorkerRuns);
     }
 
     private static void RootWorker(ClrRuntime runtime, Golden golden)
@@ -239,16 +249,22 @@ internal static class WorkerPool
             Failure.Fail("RootEnumerator", golden.ClrIndex,
                 $"root count mismatch: expected {golden.RootCount:n0}, got {count:n0}");
         }
+
+        Interlocked.Add(ref Stats.RootsWalked, count);
+        Interlocked.Increment(ref Stats.RootWorkerRuns);
     }
 
     private static void BfsWorker(ClrRuntime runtime, Golden golden)
     {
-        int reachable = BfsReachability.Walk(runtime.Heap, golden.RootObjectAddresses);
+        int reachable = BfsReachability.Walk(runtime.Heap, golden.RootObjectAddresses, countRefs: true);
         if (reachable != golden.ReachableCount)
         {
             Failure.Fail("BfsReachability", golden.ClrIndex,
                 $"reachable count mismatch: expected {golden.ReachableCount:n0}, got {reachable:n0}");
         }
+
+        Interlocked.Add(ref Stats.BfsReachableVisited, reachable);
+        Interlocked.Increment(ref Stats.BfsWorkerRuns);
     }
 
     private static void FlusherLoop(ClrRuntime runtime, CancellationToken ct)

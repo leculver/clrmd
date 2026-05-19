@@ -33,6 +33,7 @@ internal static class Program
         int timeoutSeconds = 7 * 60 + 30;   // default 7.5 min; outer script always passes --timeout
         int totalThreads = Environment.ProcessorCount;
         int dataTargetTeardownEvery = DefaultDataTargetTeardownEvery;
+        string? statsFile = null;
 
         for (int i = 1; i < args.Length; i++)
         {
@@ -59,6 +60,14 @@ internal static class Program
                         return 1;
                     }
                     break;
+                case "--stats-file":
+                    if (i + 1 >= args.Length)
+                    {
+                        Console.Error.WriteLine("--stats-file requires a path");
+                        return 1;
+                    }
+                    statsFile = args[++i];
+                    break;
                 default:
                     Console.Error.WriteLine($"Unknown argument: {args[i]}");
                     PrintUsage();
@@ -73,7 +82,12 @@ internal static class Program
         }
 
         Failure.DumpPath = dumpPath;
-        Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery}");
+        Stats.DumpPath = dumpPath;
+        Stats.StatsFile = statsFile;
+        Stats.ThreadCount = totalThreads;
+        Stats.StartTime = Stopwatch.StartNew();
+
+        Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery} stats={statsFile ?? "<none>"}");
 
         DataTargetOptions options = new() { UseLockFreeMemoryMapReader = true };
 
@@ -86,6 +100,7 @@ internal static class Program
         catch (Exception ex)
         {
             Log($"[fatal]  failed to load dump: {ex.GetType().Name}: {ex.Message}");
+            Stats.WriteStatsLine("load-failed", $"{ex.GetType().Name}: {ex.Message}");
             return 4;
         }
 
@@ -96,6 +111,7 @@ internal static class Program
         catch (Exception ex)
         {
             Log($"[fatal]  computing goldens threw {ex.GetType().Name}: {ex.Message}");
+            Stats.WriteStatsLine("golden-failed", $"{ex.GetType().Name}: {ex.Message}");
             dt.Dispose();
             return 4;
         }
@@ -103,6 +119,7 @@ internal static class Program
         if (goldens.Length == 0)
         {
             Log("[fatal]  no working ClrVersions; exiting 2 so outer script deletes the dump");
+            Stats.WriteStatsLine("no-working-clr");
             dt.Dispose();
             return 2;
         }
@@ -114,6 +131,7 @@ internal static class Program
         while (sw.ElapsedMilliseconds < deadlineMs)
         {
             iteration++;
+            Stats.Iterations = iteration;
             Failure.CurrentIteration = iteration;
 
             // Recreate ClrRuntimes for the working CLR indices.
@@ -132,6 +150,7 @@ internal static class Program
                     Log($"[oom]    iteration {iteration}: {ex.Message}");
                     Cleanup(runtimes);
                     dt.Dispose();
+                    Stats.WriteStatsLine("oom", ex.Message);
                     return 3;
                 }
                 Failure.Fail("CreateRuntime", null, "ClrRuntime creation failed after succeeding during golden computation", ex);
@@ -158,18 +177,21 @@ internal static class Program
                 catch (Exception ex)
                 {
                     Log($"[fatal]  DataTarget reload failed: {ex.GetType().Name}: {ex.Message}");
+                    Stats.WriteStatsLine("reload-failed", $"{ex.GetType().Name}: {ex.Message}");
                     return 4;
                 }
+                Stats.DataTargetReloads++;
                 Log($"[reload] iteration {iteration}: DataTarget reloaded");
             }
 
             // Also flush from the outside so back-to-back iterations don't share too much state.
             dt.DataReader.FlushCachedData();
 
-            Log($"[iter]   {iteration} in {iter.Elapsed.TotalSeconds:F2}s (total {sw.Elapsed.TotalMinutes:F1}m / {timeoutSeconds / 60.0:F1}m)");
+            Log($"[iter]   {iteration} in {iter.Elapsed.TotalSeconds:F2}s (total {sw.Elapsed.TotalMinutes:F1}m / {timeoutSeconds / 60.0:F1}m) heapObj={Stats.HeapObjectsWalked:n0} bfsRefs={Stats.BfsRefsExpanded:n0}");
         }
 
         Log($"[done]   {iteration} iterations in {sw.Elapsed.TotalMinutes:F2} min; clean exit");
+        Stats.WriteStatsLine("clean");
         dt.Dispose();
         return 0;
     }
@@ -193,7 +215,7 @@ internal static class Program
     private static void PrintUsage()
     {
         Console.Error.WriteLine("Usage:");
-        Console.Error.WriteLine("  stress.exe <dump-path> [--timeout SECS] [--threads N] [--dt-reload-every N]");
+        Console.Error.WriteLine("  stress.exe <dump-path> [--timeout SECS] [--threads N] [--dt-reload-every N] [--stats-file PATH]");
         Console.Error.WriteLine("  stress.exe --validate <dump-path>");
     }
 }

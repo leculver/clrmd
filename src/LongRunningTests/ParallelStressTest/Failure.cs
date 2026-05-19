@@ -50,6 +50,9 @@ internal static class Failure
         if (Debugger.IsAttached)
             Debugger.Break();
 
+        // Persist coverage for this invocation BEFORE the process aborts.
+        Stats.WriteStatsLine("failed", $"[{workerKind}] {reason}");
+
         Environment.FailFast($"ClrMD stress test failure [{workerKind}] {reason}", ex);
     }
 }
