@@ -56,26 +56,38 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
 
         public IEnumerable<MemoryRange> EnumerateThreadAllocationContexts()
         {
-            if (_sos12 is not null && _sos12.GetGlobalAllocationContext(out ulong allocPointer, out ulong allocLimit))
+            List<MemoryRange>? results = null;
+            lock (_sos.SyncRoot)
             {
-                if (allocPointer < allocLimit)
-                    yield return new(allocPointer, allocLimit);
+                if (_sos12 is not null && _sos12.GetGlobalAllocationContext(out ulong allocPointer, out ulong allocLimit))
+                {
+                    if (allocPointer < allocLimit)
+                    {
+                        results ??= new List<MemoryRange>();
+                        results.Add(new(allocPointer, allocLimit));
+                    }
+                }
+
+                if (!_sos.GetThreadStoreData(out ThreadStoreData threadStore))
+                    return (IEnumerable<MemoryRange>?)results ?? Array.Empty<MemoryRange>();
+
+                ulong address = threadStore.FirstThread.ToAddress(_target);
+                for (int i = 0; i < threadStore.ThreadCount && address != 0; i++)
+                {
+                    if (!_sos.GetThreadData(ClrDataAddress.FromTargetAddress(address, _target), out ThreadData thread))
+                        break;
+
+                    if (thread.AllocationContextPointer.ToAddress(_target) < thread.AllocationContextLimit.ToAddress(_target))
+                    {
+                        results ??= new List<MemoryRange>();
+                        results.Add(new(thread.AllocationContextPointer.ToAddress(_target), thread.AllocationContextLimit.ToAddress(_target)));
+                    }
+
+                    address = thread.NextThread.ToAddress(_target);
+                }
             }
 
-            if (!_sos.GetThreadStoreData(out ThreadStoreData threadStore))
-                yield break;
-
-            ulong address = threadStore.FirstThread.ToAddress(_target);
-            for (int i = 0; i < threadStore.ThreadCount && address != 0; i++)
-            {
-                if (!_sos.GetThreadData(ClrDataAddress.FromTargetAddress(address, _target), out ThreadData thread))
-                    break;
-
-                if (thread.AllocationContextPointer.ToAddress(_target) < thread.AllocationContextLimit.ToAddress(_target))
-                    yield return new(thread.AllocationContextPointer.ToAddress(_target), thread.AllocationContextLimit.ToAddress(_target));
-
-                address = thread.NextThread.ToAddress(_target);
-            }
+            return (IEnumerable<MemoryRange>?)results ?? Array.Empty<MemoryRange>();
         }
 
         public IEnumerable<(ulong Source, ulong Target)> EnumerateDependentHandles()
@@ -108,62 +120,75 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
 
         public IEnumerable<SyncBlockInfo> EnumerateSyncBlocks()
         {
-            HResult hr = _sos.GetSyncBlockData(1, out SyncBlockData data);
-            if (!hr || data.TotalSyncBlockCount == 0)
-                yield break;
-
-            int max = data.TotalSyncBlockCount >= int.MaxValue ? int.MaxValue : (int)data.TotalSyncBlockCount;
-
-            int curr = 1;
-            do
+            List<SyncBlockInfo>? results = null;
+            lock (_sos.SyncRoot)
             {
-                if (data.Free == 0)
+                HResult hr = _sos.GetSyncBlockData(1, out SyncBlockData data);
+                if (!hr || data.TotalSyncBlockCount == 0)
+                    return Array.Empty<SyncBlockInfo>();
+
+                int max = data.TotalSyncBlockCount >= int.MaxValue ? int.MaxValue : (int)data.TotalSyncBlockCount;
+
+                int curr = 1;
+                do
                 {
-                    yield return new()
+                    if (data.Free == 0)
                     {
-                        Index = curr,
-                        Address = data.Address.ToAddress(_target),
-                        Object = data.Object.ToAddress(_target),
-                        AppDomain = data.AppDomain.ToAddress(_target),
-                        AdditionalThreadCount = data.AdditionalThreadCount.ToSigned(),
-                        COMFlags = (SyncBlockComFlags)data.COMFlags,
-                        HoldingThread = data.HoldingThread.ToAddress(_target),
-                        MonitorHeldCount = data.MonitorHeld.ToSigned(),
-                        Recursion = data.Recursion.ToSigned()
-                    };
-                }
+                        results ??= new List<SyncBlockInfo>();
+                        results.Add(new()
+                        {
+                            Index = curr,
+                            Address = data.Address.ToAddress(_target),
+                            Object = data.Object.ToAddress(_target),
+                            AppDomain = data.AppDomain.ToAddress(_target),
+                            AdditionalThreadCount = data.AdditionalThreadCount.ToSigned(),
+                            COMFlags = (SyncBlockComFlags)data.COMFlags,
+                            HoldingThread = data.HoldingThread.ToAddress(_target),
+                            MonitorHeldCount = data.MonitorHeld.ToSigned(),
+                            Recursion = data.Recursion.ToSigned()
+                        });
+                    }
 
-                curr++;
-                if (curr > max)
-                    break;
+                    curr++;
+                    if (curr > max)
+                        break;
 
-                hr = _sos.GetSyncBlockData(curr, out data);
-            } while (hr);
+                    hr = _sos.GetSyncBlockData(curr, out data);
+                } while (hr);
+            }
+
+            return (IEnumerable<SyncBlockInfo>?)results ?? Array.Empty<SyncBlockInfo>();
         }
 
         public IEnumerable<SubHeapInfo> EnumerateSubHeaps()
         {
-            if (_gcState.Kind == AbstractDac.GCKind.Server)
+            List<SubHeapInfo>? results = null;
+            lock (_sos.SyncRoot)
             {
-                ClrDataAddress[] heapAddresses = _sos.GetHeapList(_gcState.HeapCount);
-                for (int i = 0; i < heapAddresses.Length; i++)
+                if (_gcState.Kind == AbstractDac.GCKind.Server)
                 {
-                    if (_sos.GetServerHeapDetails(heapAddresses[i], out HeapDetails heapData))
+                    ClrDataAddress[] heapAddresses = _sos.GetHeapList(_gcState.HeapCount);
+                    for (int i = 0; i < heapAddresses.Length; i++)
                     {
-                        ulong heapAddr = heapAddresses[i].ToAddress(_target);
-                        SubHeapInfo subHeapInfo = CreateSubHeapInfo(heapAddr, i, heapData);
-                        yield return subHeapInfo;
+                        if (_sos.GetServerHeapDetails(heapAddresses[i], out HeapDetails heapData))
+                        {
+                            ulong heapAddr = heapAddresses[i].ToAddress(_target);
+                            results ??= new List<SubHeapInfo>();
+                            results.Add(CreateSubHeapInfo(heapAddr, i, heapData));
+                        }
+                    }
+                }
+                else
+                {
+                    if (_sos.GetWksHeapDetails(out HeapDetails heapData))
+                    {
+                        results ??= new List<SubHeapInfo>();
+                        results.Add(CreateSubHeapInfo(0, 0, heapData));
                     }
                 }
             }
-            else
-            {
-                if (_sos.GetWksHeapDetails(out HeapDetails heapData))
-                {
-                    SubHeapInfo subHeapInfo = CreateSubHeapInfo(0, 0, heapData);
-                    yield return subHeapInfo;
-                }
-            }
+
+            return (IEnumerable<SubHeapInfo>?)results ?? Array.Empty<SubHeapInfo>();
         }
 
         private SubHeapInfo CreateSubHeapInfo(ulong address, int i, HeapDetails heapData)
@@ -377,7 +402,9 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                 return default;
 
             (uint threadId, uint recursion) = GetThinlockData(header);
-            ulong threadAddress = _sos.GetThreadFromThinlockId(threadId).ToAddress(_target);
+            ulong threadAddress;
+            lock (_sos.SyncRoot)
+                threadAddress = _sos.GetThreadFromThinlockId(threadId).ToAddress(_target);
 
             if (threadAddress == 0)
                 return default;
@@ -408,7 +435,9 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                 if (validMts.Contains(mt))
                     return true;
 
-            bool verified = _sos.GetMethodTableData(ClrDataAddress.FromTargetAddress(mt, _target), out _);
+            bool verified;
+            lock (_sos.SyncRoot)
+                verified = _sos.GetMethodTableData(ClrDataAddress.FromTargetAddress(mt, _target), out _);
             if (verified)
             {
                 lock (validMts)
@@ -421,10 +450,13 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
         public MemoryRange GetInternalRootArray(ulong subHeapAddress)
         {
             DacHeapAnalyzeData analyzeData;
-            if (subHeapAddress != 0)
-                _sos.GetHeapAnalyzeData(ClrDataAddress.FromTargetAddress(subHeapAddress, _target), out analyzeData);
-            else
-                _sos.GetHeapAnalyzeData(out analyzeData);
+            lock (_sos.SyncRoot)
+            {
+                if (subHeapAddress != 0)
+                    _sos.GetHeapAnalyzeData(ClrDataAddress.FromTargetAddress(subHeapAddress, _target), out analyzeData);
+                else
+                    _sos.GetHeapAnalyzeData(out analyzeData);
+            }
 
             if (analyzeData.InternalRootArray.IsNull || analyzeData.InternalRootArrayIndex == 0)
                 return default;
@@ -437,20 +469,23 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
         public bool GetOOMInfo(ulong subHeapAddress, out OomInfo oomInfo)
         {
             DacOOMData oomData;
-            if (subHeapAddress != 0)
+            lock (_sos.SyncRoot)
             {
-                if (!_sos.GetOOMData(ClrDataAddress.FromTargetAddress(subHeapAddress, _target), out oomData) || oomData.Reason == OutOfMemoryReason.None && oomData.GetMemoryFailure == GetMemoryFailureReason.None)
+                if (subHeapAddress != 0)
                 {
-                    oomInfo = default;
-                    return false;
+                    if (!_sos.GetOOMData(ClrDataAddress.FromTargetAddress(subHeapAddress, _target), out oomData) || oomData.Reason == OutOfMemoryReason.None && oomData.GetMemoryFailure == GetMemoryFailureReason.None)
+                    {
+                        oomInfo = default;
+                        return false;
+                    }
                 }
-            }
-            else
-            {
-                if (!_sos.GetOOMData(out oomData) || oomData.Reason == OutOfMemoryReason.None && oomData.GetMemoryFailure == GetMemoryFailureReason.None)
+                else
                 {
-                    oomInfo = default;
-                    return false;
+                    if (!_sos.GetOOMData(out oomData) || oomData.Reason == OutOfMemoryReason.None && oomData.GetMemoryFailure == GetMemoryFailureReason.None)
+                    {
+                        oomInfo = default;
+                        return false;
+                    }
                 }
             }
 
@@ -471,7 +506,8 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
         {
             if (_sos16 != null)
             {
-                return _sos16.GetDynamicAdaptationMode();
+                lock (_sos.SyncRoot)
+                    return _sos16.GetDynamicAdaptationMode();
             }
             else
             {
