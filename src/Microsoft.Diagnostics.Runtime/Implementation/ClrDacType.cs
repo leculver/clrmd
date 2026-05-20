@@ -157,10 +157,10 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             if (_elementType != ClrElementType.Unknown)
                 return _elementType;
 
-            if (this == Heap.ObjectType)
+            if (ReferenceEquals(this, Heap.ObjectType))
                 return _elementType = ClrElementType.Object;
 
-            if (this == Heap.StringType)
+            if (ReferenceEquals(this, Heap.StringType))
                 return _elementType = ClrElementType.String;
 
             if (ComponentSize > 0)
@@ -170,7 +170,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             if (baseType is null)
                 return _elementType = ClrElementType.Object;
 
-            if (baseType == Heap.ObjectType)
+            if (ReferenceEquals(baseType, Heap.ObjectType))
                 return _elementType = ClrElementType.Class;
 
             if (baseType.Name != "System.ValueType")
@@ -235,7 +235,10 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             return new ClrEnum(this);
         }
 
-        public override bool IsFree => this == Heap.FreeType;
+        // ReferenceEquals: FreeType is a per-heap singleton (Interlocked.CompareExchange in
+        // ClrTypeFactory.GetOrCreateBasicType). Avoids dispatching to ClrType.Equals, which
+        // can do expensive (and racy under stress) Name/IsPrimitive lookups.
+        public override bool IsFree => ReferenceEquals(this, Heap.FreeType);
 
         private const uint FinalizationSuppressedFlag = 0x40000000;
 

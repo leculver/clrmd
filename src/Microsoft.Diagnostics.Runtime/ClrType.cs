@@ -513,6 +513,15 @@ namespace Microsoft.Diagnostics.Runtime
             if (MethodTable != 0 && other.MethodTable != 0)
                 return MethodTable == other.MethodTable;
 
+            // A type with MethodTable == 0 is a singleton (e.g. Heap.ErrorType) or a
+            // synthetic type that cannot be uniquely identified by MT. If exactly one
+            // side has MT == 0, the two cannot be equal; if both do, ReferenceEquals
+            // above already handled the singleton case. Returning false here avoids
+            // dispatching to IsPrimitive/GetElementType/Name, which under stress have
+            // raced on DAC state and produced intermittent AVs.
+            if (MethodTable == 0 || other.MethodTable == 0)
+                return false;
+
             if (other.IsPointer)
                 return ComponentType == other.ComponentType;
 
