@@ -116,7 +116,7 @@ internal static class Program
 
         DataTargetOptions options = new()
         {
-            UseLockFreeMemoryMapReader = true,
+            UseLockFreeMemoryMapReader = false,
             VerifyDacOnWindows = false,
         };
 
