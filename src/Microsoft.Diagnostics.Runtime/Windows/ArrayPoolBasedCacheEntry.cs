@@ -165,15 +165,18 @@ namespace Microsoft.Diagnostics.Runtime.Windows
             for (int i = 0; i < _pages.Length; i++)
             {
                 // Atomically claim the slot. In-flight readers that already captured
-                // the page reference can still safely read its (immutable) contents;
-                // the underlying byte[] is returned to ArrayPool<byte>.Shared but the
-                // array itself remains a valid managed object.
+                // the page reference (via Volatile.Read on the read path) may still be
+                // inside CopyDataFromPage / InvokeCallbackWithDataPtr mid-memcpy on
+                // page.Data. We intentionally do NOT return page.Data to
+                // ArrayPool<byte>.Shared here: if we did, another thread could rent the
+                // same buffer and overwrite it under that reader, producing corrupted
+                // reads (e.g. zeroed MethodTable pointers leading to spurious null
+                // ClrType lookups). Letting GC reclaim the array preserves the data
+                // for any in-flight reader's lifetime. Eviction is rare relative to
+                // the hot read path, so the lost pool reuse is acceptable.
                 CachePage<byte[]> page = Interlocked.Exchange(ref _pages[i], null);
                 if (page != null)
-                {
-                    ArrayPool<byte>.Shared.Return(page.Data);
                     dataRemoved += page.DataExtent;
-                }
             }
 
             return dataRemoved;
