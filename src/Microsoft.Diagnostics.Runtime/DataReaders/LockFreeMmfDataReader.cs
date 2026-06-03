@@ -74,7 +74,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // that falls back to binary search via FindSegment.
         private readonly PaddedInt[] _lastSegmentByStripe;
         private readonly int _stripeMask;
-        private bool _disposed;
+        private readonly bool _hasOverlappingSegments;
+        private int _disposed;
 
         // Cache-line sized container for an int. The 64-byte size is a generous floor that
         // covers x64 (64), Apple silicon (128 — we accept some sharing there), and most ARM.
@@ -155,8 +156,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                     basePtr = (IntPtr)(ptr + accessor.PointerOffset);
                 }
 
-                Segment[] segments = BuildSegments(segmentSource.EnumerateMemorySegments(), (ulong)viewLength);
-
+                Segment[] segments = BuildSegments(segmentSource.EnumerateMemorySegments(), (ulong)viewLength, out bool hasOverlappingSegments);
                 // Size the stripe array to ProcessorCount * 2 (rounded up to a power of two,
                 // minimum 4). This covers oversubscription cheaply — total footprint is
                 // 64 * stripes bytes (~1–2 KB on typical machines).
@@ -168,6 +168,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 _accessor = accessor;
                 _segments = segments;
                 _lastSegmentByStripe = new PaddedInt[stripes];
+                _hasOverlappingSegments = hasOverlappingSegments;
                 _stripeMask = stripes - 1;
             }
             catch (Exception ex)
@@ -206,7 +207,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             => ex is OutOfMemoryException or IOException;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+        private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
         private static string BuildOomMessage(string dumpPath)
         {
@@ -233,7 +234,7 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 $"to the streaming reader.";
         }
 
-        private static Segment[] BuildSegments(IReadOnlyList<DumpMemorySegment> source, ulong viewLength)
+        private static Segment[] BuildSegments(IReadOnlyList<DumpMemorySegment> source, ulong viewLength, out bool hasOverlappingSegments)
         {
             int count = source.Count;
             Segment[] result = new Segment[count];
@@ -251,7 +252,21 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 Array.Resize(ref result, validCount);
 
             // The contract of IDumpFileMemorySource requires sorted-by-VA, but be defensive.
-            Array.Sort(result, static (a, b) => a.VirtualAddress.CompareTo(b.VirtualAddress));
+            Array.Sort(result, static (a, b) => a.VirtualAddress != b.VirtualAddress ? a.VirtualAddress.CompareTo(b.VirtualAddress) : b.Size.CompareTo(a.Size));
+
+            hasOverlappingSegments = false;
+            ulong maxEnd = 0;
+            for (int i = 0; i < result.Length; i++)
+            {
+                Segment segment = result[i];
+                if (i != 0 && segment.VirtualAddress < maxEnd)
+                    hasOverlappingSegments = true;
+
+                ulong end = segment.Size > ulong.MaxValue - segment.VirtualAddress ? ulong.MaxValue : segment.VirtualAddress + segment.Size;
+                if (end > maxEnd)
+                    maxEnd = end;
+            }
+
             return result;
         }
 
@@ -296,11 +311,11 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             // Span adjacent segments transparently — matches the existing minidump readers.
             while (bytesRead < buffer.Length)
             {
-                int nextIdx = idx + 1;
-                if ((uint)nextIdx >= (uint)_segments.Length)
+                ulong nextAddress = address + (ulong)bytesRead;
+                int nextIdx = _hasOverlappingSegments ? FindSegment(nextAddress) : idx + 1;
+                if (nextIdx == idx || (uint)nextIdx >= (uint)_segments.Length)
                     break;
 
-                ulong nextAddress = address + (ulong)bytesRead;
                 ref Segment nextSeg = ref _segments[nextIdx];
                 if (!nextSeg.Contains(nextAddress))
                     break;
@@ -460,6 +475,9 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         private int FindSegment(ulong address)
         {
+            if (_hasOverlappingSegments)
+                return FindOverlappingSegment(address);
+
             int lo = 0;
             int hi = _segments.Length - 1;
 
@@ -474,6 +492,21 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                     lo = mid + 1;
                 else
                     return mid;
+            }
+
+            return -1;
+        }
+
+        private int FindOverlappingSegment(ulong address)
+        {
+            for (int i = 0; i < _segments.Length; i++)
+            {
+                ref Segment seg = ref _segments[i];
+                if (address < seg.VirtualAddress)
+                    break;
+
+                if (seg.Contains(address))
+                    return i;
             }
 
             return -1;
@@ -682,9 +715,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         public void Dispose()
         {
-            if (_disposed)
+            if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
-            _disposed = true;
 
             if (_inner is IDisposable d)
                 d.Dispose();

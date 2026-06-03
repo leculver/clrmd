@@ -285,6 +285,39 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         }
 
         [Fact]
+        public void LockFreeMmfDataReader_FindsEarlierOverlappingSegment()
+        {
+            byte[] fileBytes = new byte[0x4000];
+            fileBytes[0x1000] = 0xa1;
+            fileBytes[0x1001] = 0xb2;
+            fileBytes[0x1002] = 0xc3;
+            fileBytes[0x1003] = 0xd4;
+            string path = WriteTempFile(fileBytes);
+            try
+            {
+                using FakeDumpReader inner = new(new[]
+                {
+                    new DumpMemorySegment(0x1000, 0, 0x2000),
+                    new DumpMemorySegment(0x1800, 0x3000, 0x100),
+                    new DumpMemorySegment(0x3000, 0x3100, 0x10),
+                });
+                using LockFreeMmfDataReader reader = new(path, inner);
+
+                byte[] buffer = new byte[4];
+                Assert.Equal(4, reader.Read(0x2000, buffer));
+                Assert.Equal(new byte[] { 0xa1, 0xb2, 0xc3, 0xd4 }, buffer);
+
+                ISegmentedDirectMemoryAccess direct = reader;
+                Assert.True(direct.TryGetDirectSpan(0x2000, 4, out ReadOnlySpan<byte> span));
+                Assert.True(span.SequenceEqual(buffer));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void LockFreeMmfDataReader_RejectsOutOfViewDirectSpan()
         {
             string path = WriteTempFile([1, 2, 3, 4]);
@@ -320,6 +353,46 @@ namespace Microsoft.Diagnostics.Runtime.Tests
                 Assert.Throws<ObjectDisposedException>(() => reader.Read(0x1000, buffer));
                 ISegmentedDirectMemoryAccess direct = reader;
                 Assert.Throws<ObjectDisposedException>(() => direct.TryGetDirectSpan(0x1000, 1, out _));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public async System.Threading.Tasks.Task LockFreeMmfDataReader_ConcurrentDisposeDisposesInnerReaderOnce()
+        {
+            string path = WriteTempFile([1, 2, 3, 4]);
+            try
+            {
+                FakeDumpReader inner = new(new[] { new DumpMemorySegment(0x1000, 0, 4) });
+                LockFreeMmfDataReader reader = new(path, inner);
+                int threadCount = Math.Max(8, Environment.ProcessorCount * 2);
+                using System.Threading.ManualResetEventSlim gate = new(initialState: false);
+                System.Collections.Concurrent.ConcurrentQueue<Exception> failures = new();
+                System.Threading.Tasks.Task[] tasks = Enumerable.Range(0, threadCount)
+                    .Select(_ => System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try
+                        {
+                            gate.Wait();
+                            reader.Dispose();
+                        }
+                        catch (Exception ex)
+                        {
+                            failures.Enqueue(ex);
+                        }
+                    }))
+                    .ToArray();
+
+                gate.Set();
+                await System.Threading.Tasks.Task.WhenAll(tasks);
+
+                if (!failures.IsEmpty)
+                    throw new Xunit.Sdk.XunitException("concurrent dispose failed: " + failures.ToArray()[0]);
+
+                Assert.Equal(1, inner.DisposeCount);
             }
             finally
             {
@@ -365,7 +438,8 @@ namespace Microsoft.Diagnostics.Runtime.Tests
                 _throwOnEnumerate = throwOnEnumerate;
             }
 
-            public bool Disposed { get; private set; }
+            public int DisposeCount;
+            public bool Disposed => DisposeCount != 0;
             public int PointerSize => 8;
             public string DisplayName => nameof(FakeDumpReader);
             public bool IsThreadSafe => true;
@@ -392,7 +466,7 @@ namespace Microsoft.Diagnostics.Runtime.Tests
             public IEnumerable<ModuleInfo> EnumerateModules() => Array.Empty<ModuleInfo>();
             public bool GetThreadContext(uint threadID, uint contextFlags, Span<byte> context) => false;
             public void FlushCachedData() { }
-            public void Dispose() => Disposed = true;
+            public void Dispose() => System.Threading.Interlocked.Increment(ref DisposeCount);
         }
     }
 }
