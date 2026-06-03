@@ -20,12 +20,14 @@
 #   ./run-stress.ps1 -ValidateOnly       # just refresh .stress-validation.json
 #   ./run-stress.ps1 -ResetState         # reset state.json (lose streak)
 #   ./run-stress.ps1 -StreakHours 8      # tune streak target (default 8)
-
+#   ./run-stress.ps1 -Reader standard    # validate/stress the standard reader instead of lockfree
 param(
     [switch]$ValidateOnly,
     [switch]$ResetState,
     [int]$StreakHours = 8,
-    [int]$ThreadsOverride = 0
+    [int]$ThreadsOverride = 0,
+    [ValidateSet('standard','lockfree')]
+    [string]$Reader = 'lockfree'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -150,13 +152,13 @@ function Update-ValidationList {
 
         $existing = $null
         if (Has-Prop $Validation.entries $name) { $existing = $Validation.entries.$name }
-        if ($null -ne $existing -and $existing.fileSize -eq $dump.Length) {
-            continue   # already validated with matching size
+        if ($null -ne $existing -and $existing.fileSize -eq $dump.Length -and (Has-Prop $existing 'reader') -and $existing.reader -eq $Reader) {
+            continue   # already validated with matching size and reader mode
         }
 
-        Write-Log "[validate] $name ($([math]::Round($dump.Length / 1GB, 2)) GB)"
+        Write-Log "[validate] $name ($([math]::Round($dump.Length / 1GB, 2)) GB) reader=$Reader"
         Set-DumpEnv   # validation reads dump too; capture failures
-        $output = & $StressExe --validate $dump.FullName 2>&1 | Out-String
+        $output = & $StressExe --validate $dump.FullName --reader $Reader 2>&1 | Out-String
         $exit = $LASTEXITCODE
         $output = $output.Trim()
         Write-Log "[validate] exit=$exit"
@@ -166,6 +168,7 @@ function Update-ValidationList {
             0 {
                 $entry = [pscustomobject]@{
                     fileSize    = $dump.Length
+                    reader      = $Reader
                     validatedAt = (Get-Date).ToUniversalTime().ToString('o')
                     output      = $output
                 }
@@ -257,6 +260,7 @@ Write-Log "[boot] dumps     = $DumpsDir"
 Write-Log "[boot] crashes   = $CrashesDir"
 Write-Log "[boot] state     = $StateFile"
 Write-Log "[boot] stats     = $StatsFile"
+Write-Log "[boot] reader    = $Reader"
 
 $state = Load-State
 $validation = Load-Validation
@@ -303,7 +307,7 @@ while ($true) {
     $crashesBefore = @(Get-ChildItem -LiteralPath $CrashesDir -Filter '*.dmp' -ErrorAction SilentlyContinue).Count
 
     $startUtc = (Get-Date).ToUniversalTime()
-    $argList = @($dumpPath, '--timeout', $timeoutSec, '--stats-file', $StatsFile)
+    $argList = @($dumpPath, '--timeout', $timeoutSec, '--stats-file', $StatsFile, '--reader', $Reader)
     if ($ThreadsOverride -gt 0) { $argList += '--threads'; $argList += $ThreadsOverride }
 
     & $StressExe @argList

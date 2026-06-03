@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
@@ -179,7 +179,7 @@ namespace Microsoft.Diagnostics.Runtime
                 // We will only cache the stack if we completed enumeration (i.e. got less
                 // than maxFrames frames)
                 int maxFrames = Runtime.DataTarget.Options.Limits.MaxStackFrames;
-                ClrStackFrame[] stack = threadHelpers.EnumerateStackTrace(OSThreadId, includeContext: false, traceErrors: IsAlive).Select(r => CreateClrStackFrame(r)).Take(maxFrames).ToArray();
+                ClrStackFrame[] stack = maxFrames <= 0 ? Array.Empty<ClrStackFrame>() : threadHelpers.EnumerateStackTrace(OSThreadId, includeContext: false, maxFrames: maxFrames, traceErrors: IsAlive).Select(r => CreateClrStackFrame(r)).Take(maxFrames).ToArray();
                 if (Runtime.DataTarget.CacheOptions.CacheStackTraces && stack.Length < maxFrames)
                     _frameCache = new(stack, includedContext: false);
 
@@ -261,12 +261,15 @@ namespace Microsoft.Diagnostics.Runtime
             if (threadHelpers is null)
                 return Array.Empty<ClrStackFrame>();
 
+            if (maxFrames <= 0)
+                return Array.Empty<ClrStackFrame>();
+
             Cache<ClrStackFrame>? cache = _frameCache;
             if (cache is not null && (!includeContext || cache.IncludedContext))
-                return Array.AsReadOnly(cache.Elements);
+                return cache.Elements.Length <= maxFrames ? Array.AsReadOnly(cache.Elements) : cache.Elements.Take(maxFrames);
 
             if (!Runtime.DataTarget.CacheOptions.CacheStackTraces)
-                return threadHelpers.EnumerateStackTrace(OSThreadId, includeContext, traceErrors: IsAlive).Select(r => CreateClrStackFrame(r));
+                return threadHelpers.EnumerateStackTrace(OSThreadId, includeContext, maxFrames, traceErrors: IsAlive).Select(r => CreateClrStackFrame(r)).Take(maxFrames);
 
             // Serialize cache population so concurrent DAC stack-walks don't truncate
             // each other and publish a partial frame array.
@@ -274,9 +277,9 @@ namespace Microsoft.Diagnostics.Runtime
             {
                 cache = _frameCache;
                 if (cache is not null && (!includeContext || cache.IncludedContext))
-                    return Array.AsReadOnly(cache.Elements);
+                    return cache.Elements.Length <= maxFrames ? Array.AsReadOnly(cache.Elements) : cache.Elements.Take(maxFrames);
 
-                ClrStackFrame[] frames = threadHelpers.EnumerateStackTrace(OSThreadId, includeContext, traceErrors: IsAlive)
+                ClrStackFrame[] frames = threadHelpers.EnumerateStackTrace(OSThreadId, includeContext, maxFrames, traceErrors: IsAlive)
                     .Select(r => CreateClrStackFrame(r))
                     .Take(maxFrames)
                     .ToArray();

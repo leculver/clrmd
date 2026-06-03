@@ -133,9 +133,10 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
             MemoryMappedFile? mmf = null;
             MemoryMappedViewAccessor? accessor = null;
             FileStream? fs = null;
+            bool pointerAcquired = false;
             try
             {
-                // Open the file ourselves with FileShare.Read|Write|Delete so we don't conflict with
+                // Open the file ourselves with FileShare.Read|Delete so we don't conflict with
                 // the inner reader (which already has the file open with FileShare.Read).
                 // MemoryMappedFile.CreateFromFile(string, ...) opens with FileShare.None internally,
                 // which would throw "file in use" against the inner reader's existing handle.
@@ -143,34 +144,47 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 mmf = MemoryMappedFile.CreateFromFile(fs, mapName: null, capacity: 0, MemoryMappedFileAccess.Read,
                     HandleInheritability.None, leaveOpen: false);
                 accessor = mmf.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
-                _viewLength = (long)accessor.SafeMemoryMappedViewHandle.ByteLength;
+                long viewLength = (long)accessor.SafeMemoryMappedViewHandle.ByteLength;
 
+                IntPtr basePtr;
                 unsafe
                 {
                     byte* ptr = null;
                     accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
-                    _basePtr = (IntPtr)(ptr + accessor.PointerOffset);
+                    pointerAcquired = true;
+                    basePtr = (IntPtr)(ptr + accessor.PointerOffset);
                 }
 
+                Segment[] segments = BuildSegments(segmentSource.EnumerateMemorySegments(), (ulong)viewLength);
+
+                // Size the stripe array to ProcessorCount * 2 (rounded up to a power of two,
+                // minimum 4). This covers oversubscription cheaply — total footprint is
+                // 64 * stripes bytes (~1–2 KB on typical machines).
+                int stripes = RoundUpToPowerOfTwo(Math.Max(4, Environment.ProcessorCount * 2));
+
+                _viewLength = viewLength;
+                _basePtr = basePtr;
                 _mmf = mmf;
                 _accessor = accessor;
+                _segments = segments;
+                _lastSegmentByStripe = new PaddedInt[stripes];
+                _stripeMask = stripes - 1;
             }
-            catch (Exception ex) when (IsAddressSpaceExhaustion(ex))
+            catch (Exception ex)
             {
+                if (pointerAcquired)
+                    accessor?.SafeMemoryMappedViewHandle.ReleasePointer();
                 accessor?.Dispose();
                 mmf?.Dispose();
                 fs?.Dispose();
-                throw new OutOfMemoryException(BuildOomMessage(dumpPath), ex);
+                if (inner is IDisposable disposableInner)
+                    disposableInner.Dispose();
+
+                if (IsAddressSpaceExhaustion(ex))
+                    throw new OutOfMemoryException(BuildOomMessage(dumpPath), ex);
+
+                throw;
             }
-
-            _segments = BuildSegments(segmentSource.EnumerateMemorySegments());
-
-            // Size the stripe array to ProcessorCount * 2 (rounded up to a power of two,
-            // minimum 4). This covers oversubscription cheaply — total footprint is
-            // 64 * stripes bytes (~1–2 KB on typical machines).
-            int stripes = RoundUpToPowerOfTwo(Math.Max(4, Environment.ProcessorCount * 2));
-            _lastSegmentByStripe = new PaddedInt[stripes];
-            _stripeMask = stripes - 1;
         }
 
         private static int RoundUpToPowerOfTwo(int value)
@@ -190,6 +204,9 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         private static bool IsAddressSpaceExhaustion(Exception ex)
             => ex is OutOfMemoryException or IOException;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
         private static string BuildOomMessage(string dumpPath)
         {
@@ -216,23 +233,22 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
                 $"to the streaming reader.";
         }
 
-        private Segment[] BuildSegments(IReadOnlyList<DumpMemorySegment> source)
+        private static Segment[] BuildSegments(IReadOnlyList<DumpMemorySegment> source, ulong viewLength)
         {
             int count = source.Count;
             Segment[] result = new Segment[count];
+            int validCount = 0;
             for (int i = 0; i < count; i++)
             {
                 DumpMemorySegment s = source[i];
-                if (s.FileOffset > (ulong)_viewLength || s.FileOffset + s.Size > (ulong)_viewLength)
-                {
-                    // Truncate / skip out-of-range entries rather than fail outright; the
-                    // inner reader can fall back if needed for cold paths (we never invoke it
-                    // for memory reads, so an empty slot just produces a 0-byte read).
-                    result[i] = new Segment(s.VirtualAddress, 0, s.FileOffset);
+                if (s.FileOffset > viewLength || s.Size > viewLength - s.FileOffset)
                     continue;
-                }
-                result[i] = new Segment(s.VirtualAddress, s.Size, s.FileOffset);
+
+                result[validCount++] = new Segment(s.VirtualAddress, s.Size, s.FileOffset);
             }
+
+            if (validCount != result.Length)
+                Array.Resize(ref result, validCount);
 
             // The contract of IDumpFileMemorySource requires sorted-by-VA, but be defensive.
             Array.Sort(result, static (a, b) => a.VirtualAddress.CompareTo(b.VirtualAddress));
@@ -243,11 +259,20 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // IMemoryReader — hot path (lock-free pointer reads)
         // ============================================================
 
-        public int PointerSize => _inner.PointerSize;
+        public int PointerSize
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _inner.PointerSize;
+            }
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Read(ulong address, Span<byte> buffer)
         {
+            ThrowIfDisposed();
+
             if (buffer.Length == 0)
                 return 0;
 
@@ -340,7 +365,18 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         private int ReadFromSegment(ref Segment seg, ulong address, Span<byte> buffer)
         {
             ulong offsetInSeg = address - seg.VirtualAddress;
-            ulong availableU = seg.Size - offsetInSeg;
+            if (offsetInSeg > seg.Size)
+                return 0;
+
+            ulong availableInSegment = seg.Size - offsetInSeg;
+            if (availableInSegment == 0 || seg.FileOffset > (ulong)_viewLength)
+                return 0;
+
+            ulong availableInView = (ulong)_viewLength - seg.FileOffset;
+            if (offsetInSeg > availableInView)
+                return 0;
+
+            ulong availableU = Math.Min(availableInSegment, availableInView - offsetInSeg);
             if (availableU == 0)
                 return 0;
 
@@ -360,6 +396,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetDirectSpan(ulong address, int length, out ReadOnlySpan<byte> span)
         {
+            ThrowIfDisposed();
+
             if (length == 0)
             {
                 span = default;
@@ -392,22 +430,30 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
             ref Segment seg = ref _segments[idx];
             ulong offsetInSeg = address - seg.VirtualAddress;
-            ulong availableU = seg.Size - offsetInSeg;
+            if (offsetInSeg > seg.Size || seg.FileOffset > (ulong)_viewLength)
+            {
+                span = default;
+                return false;
+            }
+
+            ulong availableInSegment = seg.Size - offsetInSeg;
+            ulong availableInView = (ulong)_viewLength - seg.FileOffset;
+            if (offsetInSeg > availableInView)
+            {
+                span = default;
+                return false;
+            }
+
+            ulong availableU = Math.Min(availableInSegment, availableInView - offsetInSeg);
             if (availableU < (ulong)length)
             {
-                // Range crosses a segment boundary (or extends past the segment end);
+                // Range crosses a segment boundary (or extends past the mapped view);
                 // caller falls back to Read which transparently spans adjacent segments.
                 span = default;
                 return false;
             }
 
             ulong fileOffset = seg.FileOffset + offsetInSeg;
-            if (fileOffset > (ulong)_viewLength || fileOffset + (ulong)length > (ulong)_viewLength)
-            {
-                span = default;
-                return false;
-            }
-
             span = ViewSpan((long)fileOffset, length);
             return true;
         }
@@ -437,14 +483,44 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // IDataReader — cold path (delegated to inner)
         // ============================================================
 
-        public string DisplayName => _inner.DisplayName;
+        public string DisplayName
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _inner.DisplayName;
+            }
+        }
         public bool IsThreadSafe => true;
-        public OSPlatform TargetPlatform => _inner.TargetPlatform;
-        public Architecture Architecture => _inner.Architecture;
-        public int ProcessId => _inner.ProcessId;
+        public OSPlatform TargetPlatform
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _inner.TargetPlatform;
+            }
+        }
+        public Architecture Architecture
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _inner.Architecture;
+            }
+        }
+        public int ProcessId
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _inner.ProcessId;
+            }
+        }
 
         public IEnumerable<ModuleInfo> EnumerateModules()
         {
+            ThrowIfDisposed();
+
             if (_innerLock is null)
                 return _inner.EnumerateModules();
 
@@ -455,6 +531,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         public bool GetThreadContext(uint threadID, uint contextFlags, Span<byte> context)
         {
+            ThrowIfDisposed();
+
             if (_innerLock is null)
                 return _inner.GetThreadContext(threadID, contextFlags, context);
 
@@ -464,6 +542,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         public void FlushCachedData()
         {
+            ThrowIfDisposed();
+
             // Reset every stripe so stale cache entries don't survive across a flush.
             for (int i = 0; i < _lastSegmentByStripe.Length; i++)
                 _lastSegmentByStripe[i].Value = 0;
@@ -478,6 +558,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // IThreadReader (passthrough so DAC OS thread enumeration keeps working)
         public IEnumerable<uint> EnumerateOSThreadIds()
         {
+            ThrowIfDisposed();
+
             if (_innerThreads is null)
                 return Array.Empty<uint>();
 
@@ -490,6 +572,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         public ulong GetThreadTeb(uint osThreadId)
         {
+            ThrowIfDisposed();
+
             if (_innerThreads is null)
                 return 0;
 
@@ -502,12 +586,28 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         // IDumpInfoProvider passthrough. These properties are computed once by the inner
         // and read-only thereafter, so no locking is required.
-        public bool IsMiniOrTriage => _innerInfo?.IsMiniOrTriage ?? false;
-        public bool IsCreatedByDotNetRuntime => _innerInfo?.IsCreatedByDotNetRuntime ?? false;
+        public bool IsMiniOrTriage
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _innerInfo?.IsMiniOrTriage ?? false;
+            }
+        }
+        public bool IsCreatedByDotNetRuntime
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _innerInfo?.IsCreatedByDotNetRuntime ?? false;
+            }
+        }
 
         // IThreadInfoReader passthrough
         public bool TryGetThreadInfo(uint osThreadId, out ThreadInfo info)
         {
+            ThrowIfDisposed();
+
             if (_innerThreadInfo is null)
                 throw CreateUnsupportedInterfaceException(nameof(IThreadInfoReader));
 
@@ -520,6 +620,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
 
         public IEnumerable<ThreadInfo> EnumerateThreadInfo()
         {
+            ThrowIfDisposed();
+
             if (_innerThreadInfo is null)
                 throw CreateUnsupportedInterfaceException(nameof(IThreadInfoReader));
 
@@ -533,6 +635,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // IProcessInfoProvider passthrough
         public ProcessInfo GetProcessInfo()
         {
+            ThrowIfDisposed();
+
             if (_innerProcessInfo is null)
                 throw CreateUnsupportedInterfaceException(nameof(IProcessInfoProvider));
 
@@ -546,6 +650,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // IMemoryRegionReader passthrough
         public IEnumerable<MemoryRegion> EnumerateMemoryRegions()
         {
+            ThrowIfDisposed();
+
             if (_innerRegions is null)
                 throw CreateUnsupportedInterfaceException(nameof(IMemoryRegionReader));
 
@@ -559,6 +665,8 @@ namespace Microsoft.Diagnostics.Runtime.Implementation
         // IModuleSegmentReader passthrough
         public IEnumerable<ModuleSegment> EnumerateModuleSegments(ulong moduleBaseAddress)
         {
+            ThrowIfDisposed();
+
             if (_innerModuleSegments is null)
                 throw CreateUnsupportedInterfaceException(nameof(IModuleSegmentReader));
 

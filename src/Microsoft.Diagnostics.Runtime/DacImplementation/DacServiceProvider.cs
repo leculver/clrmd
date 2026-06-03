@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
@@ -101,7 +101,15 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                     if (heap is not null)
                         return heap;
 
-                    if (_sos.GetGCHeapData(out GCInfo data) && _sos.GetCommonMethodTables(out CommonMethodTables mts) && !mts.ObjectMethodTable.IsNull)
+                    GCInfo data = default;
+                    CommonMethodTables mts = default;
+                    bool initialized;
+                    lock (_dac.SyncRoot)
+                    {
+                        initialized = _sos.GetGCHeapData(out data) && _sos.GetCommonMethodTables(out mts) && !mts.ObjectMethodTable.IsNull;
+                    }
+
+                    if (initialized)
                         return _heapHelper = new DacHeap(_sos, _sos8, _sos12, _sos16, _dataReader, _dac.TargetProperties, data, mts);
 
                     return null;

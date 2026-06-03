@@ -6,6 +6,12 @@ using System.Threading;
 using Microsoft.Diagnostics.Runtime;
 
 namespace ClrMD.Stress;
+internal enum StressReaderMode
+{
+    Standard,
+    LockFree,
+}
+
 
 internal static class Program
 {
@@ -19,15 +25,35 @@ internal static class Program
             return 1;
         }
 
-        // --validate <dump>
+        // --validate <dump> [--reader standard|lockfree]
         if (string.Equals(args[0], "--validate", StringComparison.Ordinal))
         {
-            if (args.Length != 2)
+            if (args.Length < 2)
             {
                 PrintUsage();
                 return 1;
             }
-            return Validation.Run(args[1]);
+
+            StressReaderMode validationReaderMode = StressReaderMode.LockFree;
+            for (int i = 2; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], "--reader", StringComparison.Ordinal))
+                {
+                    if (i + 1 >= args.Length || !TryParseReaderMode(args[++i], out validationReaderMode))
+                    {
+                        Console.Error.WriteLine("--reader requires 'standard' or 'lockfree'");
+                        return 1;
+                    }
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Unknown argument: {args[i]}");
+                    PrintUsage();
+                    return 1;
+                }
+            }
+
+            return Validation.Run(args[1], validationReaderMode);
         }
 
         // --failfast-test (for smoke-testing dump capture)
@@ -43,6 +69,7 @@ internal static class Program
         int timeoutSeconds = 7 * 60 + 30;   // default 7.5 min; outer script always passes --timeout
         int totalThreads = Environment.ProcessorCount;
         int dataTargetTeardownEvery = DefaultDataTargetTeardownEvery;
+        StressReaderMode readerMode = StressReaderMode.LockFree;
         string? statsFile = null;
 
         for (int i = 1; i < args.Length; i++)
@@ -78,6 +105,13 @@ internal static class Program
                     }
                     statsFile = args[++i];
                     break;
+                case "--reader":
+                    if (i + 1 >= args.Length || !TryParseReaderMode(args[++i], out readerMode))
+                    {
+                        Console.Error.WriteLine("--reader requires 'standard' or 'lockfree'");
+                        return 1;
+                    }
+                    break;
                 default:
                     Console.Error.WriteLine($"Unknown argument: {args[i]}");
                     PrintUsage();
@@ -95,9 +129,10 @@ internal static class Program
         Stats.DumpPath = dumpPath;
         Stats.StatsFile = statsFile;
         Stats.ThreadCount = totalThreads;
+        Stats.ReaderMode = ToReaderModeName(readerMode);
         Stats.StartTime = Stopwatch.StartNew();
 
-        Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery} stats={statsFile ?? "<none>"}");
+        Log($"[start]  dump={dumpPath} timeout={timeoutSeconds}s threads={totalThreads} dt-reload-every={dataTargetTeardownEvery} reader={ToReaderModeName(readerMode)} stats={statsFile ?? "<none>"}");
 
         // Hard watchdog: if the deadline + 90s elapses, force-exit. The main loop
         // only checks the deadline between iterations, so a single very slow iteration
@@ -114,11 +149,7 @@ internal static class Program
         }) { IsBackground = true, Name = "Watchdog" };
         watchdog.Start();
 
-        DataTargetOptions options = new()
-        {
-            UseLockFreeMemoryMapReader = false,
-            VerifyDacOnWindows = false,
-        };
+        DataTargetOptions options = CreateOptions(readerMode);
 
         DataTarget dt;
         Golden[] goldens;
@@ -241,10 +272,38 @@ internal static class Program
         Console.Out.Flush();
     }
 
+    internal static DataTargetOptions CreateOptions(StressReaderMode readerMode)
+        => new()
+        {
+            UseLockFreeMemoryMapReader = readerMode == StressReaderMode.LockFree,
+            VerifyDacOnWindows = false,
+        };
+
+    internal static string ToReaderModeName(StressReaderMode readerMode)
+        => readerMode == StressReaderMode.LockFree ? "lockfree" : "standard";
+
+    private static bool TryParseReaderMode(string value, out StressReaderMode readerMode)
+    {
+        if (string.Equals(value, "lockfree", StringComparison.OrdinalIgnoreCase))
+        {
+            readerMode = StressReaderMode.LockFree;
+            return true;
+        }
+
+        if (string.Equals(value, "standard", StringComparison.OrdinalIgnoreCase))
+        {
+            readerMode = StressReaderMode.Standard;
+            return true;
+        }
+
+        readerMode = default;
+        return false;
+    }
+
     private static void PrintUsage()
     {
         Console.Error.WriteLine("Usage:");
-        Console.Error.WriteLine("  stress.exe <dump-path> [--timeout SECS] [--threads N] [--dt-reload-every N] [--stats-file PATH]");
-        Console.Error.WriteLine("  stress.exe --validate <dump-path>");
+        Console.Error.WriteLine("  stress.exe <dump-path> [--timeout SECS] [--threads N] [--dt-reload-every N] [--stats-file PATH] [--reader standard|lockfree]");
+        Console.Error.WriteLine("  stress.exe --validate <dump-path> [--reader standard|lockfree]");
     }
 }

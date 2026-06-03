@@ -6,8 +6,8 @@ using Microsoft.Diagnostics.Runtime;
 namespace ClrMD.Stress;
 
 /// <summary>
-/// stress.exe --validate &lt;dump&gt; mode. Performs a single-threaded load of the
-/// dump (using the lock-free MMF reader), then for each <see cref="ClrInfo"/>
+/// stress.exe --validate &lt;dump&gt; [--reader standard|lockfree] mode. Performs a single-threaded load of the
+/// dump using the selected reader mode, then for each <see cref="ClrInfo"/>
 /// tries to create a runtime and execute one heap walk + one root walk + one
 /// BFS reachability walk.
 ///
@@ -21,13 +21,9 @@ namespace ClrMD.Stress;
 /// </summary>
 internal static class Validation
 {
-    public static int Run(string dumpPath)
+    public static int Run(string dumpPath, StressReaderMode readerMode)
     {
-        DataTargetOptions opts = new()
-        {
-            UseLockFreeMemoryMapReader = false,
-            VerifyDacOnWindows = false,
-        };
+        DataTargetOptions opts = Program.CreateOptions(readerMode);
 
         DataTarget dt;
         try
@@ -36,12 +32,12 @@ internal static class Validation
         }
         catch (OutOfMemoryException)
         {
-            EmitJson(dumpPath, status: "oom-on-load", clrs: Array.Empty<ClrResult>());
+            EmitJson(dumpPath, Program.ToReaderModeName(readerMode), status: "oom-on-load", clrs: Array.Empty<ClrResult>());
             return 3;
         }
         catch (Exception ex)
         {
-            EmitJson(dumpPath, status: $"load-failed:{ex.GetType().Name}:{Escape(ex.Message)}", clrs: Array.Empty<ClrResult>());
+            EmitJson(dumpPath, Program.ToReaderModeName(readerMode), status: $"load-failed:{ex.GetType().Name}:{Escape(ex.Message)}", clrs: Array.Empty<ClrResult>());
             return 4;
         }
 
@@ -59,7 +55,7 @@ internal static class Validation
                 if (r.Ok) workingCount++;
             }
 
-            EmitJson(dumpPath, status: workingCount > 0 ? "ok" : (sawOom ? "oom" : "no-working-clr"), clrs: results.ToArray());
+            EmitJson(dumpPath, Program.ToReaderModeName(readerMode), status: workingCount > 0 ? "ok" : (sawOom ? "oom" : "no-working-clr"), clrs: results.ToArray());
 
             if (workingCount > 0) return 0;
             if (sawOom) return 3;
@@ -110,11 +106,13 @@ internal static class Validation
         }
     }
 
-    private static void EmitJson(string dumpPath, string status, ClrResult[] clrs)
+    private static void EmitJson(string dumpPath, string readerMode, string status, ClrResult[] clrs)
     {
         // Hand-rolled JSON to avoid pulling in System.Text.Json dependencies and to keep output stable.
         Console.Write("{\"dump\":\"");
         Console.Write(Escape(dumpPath));
+        Console.Write("\",\"reader\":\"");
+        Console.Write(Escape(readerMode));
         Console.Write("\",\"status\":\"");
         Console.Write(status);
         Console.Write("\",\"clrs\":[");

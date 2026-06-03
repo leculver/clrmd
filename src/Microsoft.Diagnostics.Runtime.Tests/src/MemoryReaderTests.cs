@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Diagnostics.Runtime.Implementation;
+using System.IO;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Microsoft.Diagnostics.Runtime.Tests
@@ -255,6 +257,142 @@ namespace Microsoft.Diagnostics.Runtime.Tests
 
             if (!failures.IsEmpty)
                 throw new Xunit.Sdk.XunitException("concurrent direct-span mismatch: " + failures.ToArray()[0]);
+        }
+
+        [Fact]
+        public void LockFreeMmfDataReader_FiltersInvalidSegmentsWithoutBreakingAdjacentReads()
+        {
+            byte[] fileBytes = [1, 2, 3, 4, 5, 6, 7, 8];
+            string path = WriteTempFile(fileBytes);
+            try
+            {
+                using FakeDumpReader inner = new(new[]
+                {
+                    new DumpMemorySegment(0x1000, 0, 4),
+                    new DumpMemorySegment(0x1004, ulong.MaxValue - 1, 4),
+                    new DumpMemorySegment(0x1004, 4, 4),
+                });
+                using LockFreeMmfDataReader reader = new(path, inner);
+
+                byte[] buffer = new byte[8];
+                Assert.Equal(8, reader.Read(0x1000, buffer));
+                Assert.Equal(fileBytes, buffer);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void LockFreeMmfDataReader_RejectsOutOfViewDirectSpan()
+        {
+            string path = WriteTempFile([1, 2, 3, 4]);
+            try
+            {
+                using FakeDumpReader inner = new(new[]
+                {
+                    new DumpMemorySegment(0x1000, ulong.MaxValue - 1, 4),
+                });
+                using LockFreeMmfDataReader reader = new(path, inner);
+
+                ISegmentedDirectMemoryAccess direct = reader;
+                Assert.False(direct.TryGetDirectSpan(0x1000, 1, out ReadOnlySpan<byte> span));
+                Assert.Equal(0, span.Length);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void LockFreeMmfDataReader_ReadAfterDisposeThrowsObjectDisposedException()
+        {
+            string path = WriteTempFile([1, 2, 3, 4]);
+            try
+            {
+                using FakeDumpReader inner = new(new[] { new DumpMemorySegment(0x1000, 0, 4) });
+                LockFreeMmfDataReader reader = new(path, inner);
+                reader.Dispose();
+
+                byte[] buffer = new byte[1];
+                Assert.Throws<ObjectDisposedException>(() => reader.Read(0x1000, buffer));
+                ISegmentedDirectMemoryAccess direct = reader;
+                Assert.Throws<ObjectDisposedException>(() => direct.TryGetDirectSpan(0x1000, 1, out _));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void LockFreeMmfDataReader_ConstructorFailureDisposesInnerReader()
+        {
+            string path = WriteTempFile([1, 2, 3, 4]);
+            try
+            {
+                FakeDumpReader inner = new(Array.Empty<DumpMemorySegment>(), throwOnEnumerate: true);
+
+                Assert.Throws<InvalidOperationException>(() => new LockFreeMmfDataReader(path, inner));
+                Assert.True(inner.Disposed);
+
+                using FileStream stream = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                Assert.Equal(4, stream.Length);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        private static string WriteTempFile(byte[] bytes)
+        {
+            string path = Path.GetTempFileName();
+            File.WriteAllBytes(path, bytes);
+            return path;
+        }
+
+        private sealed class FakeDumpReader : IDataReader, IDumpFileMemorySource, IDisposable
+        {
+            private readonly IReadOnlyList<DumpMemorySegment> _segments;
+            private readonly bool _throwOnEnumerate;
+
+            public FakeDumpReader(IReadOnlyList<DumpMemorySegment> segments, bool throwOnEnumerate = false)
+            {
+                _segments = segments;
+                _throwOnEnumerate = throwOnEnumerate;
+            }
+
+            public bool Disposed { get; private set; }
+            public int PointerSize => 8;
+            public string DisplayName => nameof(FakeDumpReader);
+            public bool IsThreadSafe => true;
+            public OSPlatform TargetPlatform => OSPlatform.Windows;
+            public Architecture Architecture => Architecture.X64;
+            public int ProcessId => 0;
+
+            public IReadOnlyList<DumpMemorySegment> EnumerateMemorySegments()
+                => _throwOnEnumerate ? throw new InvalidOperationException("synthetic segment enumeration failure") : _segments;
+
+            public int Read(ulong address, Span<byte> buffer) => 0;
+            public bool Read<T>(ulong address, out T value) where T : unmanaged
+            {
+                value = default;
+                return false;
+            }
+            public T Read<T>(ulong address) where T : unmanaged => default;
+            public bool ReadPointer(ulong address, out ulong value)
+            {
+                value = 0;
+                return false;
+            }
+            public ulong ReadPointer(ulong address) => 0;
+            public IEnumerable<ModuleInfo> EnumerateModules() => Array.Empty<ModuleInfo>();
+            public bool GetThreadContext(uint threadID, uint contextFlags, Span<byte> context) => false;
+            public void FlushCachedData() { }
+            public void Dispose() => Disposed = true;
         }
     }
 }

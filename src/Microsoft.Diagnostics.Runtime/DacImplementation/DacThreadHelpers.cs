@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
@@ -95,8 +95,10 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
             return (IEnumerable<StackRootInfo>?)results ?? Array.Empty<StackRootInfo>();
         }
 
-        public IEnumerable<StackFrameInfo> EnumerateStackTrace(uint osThreadId, bool includeContext, bool traceErrors)
+        public IEnumerable<StackFrameInfo> EnumerateStackTrace(uint osThreadId, bool includeContext, int maxFrames, bool traceErrors)
         {
+            if (maxFrames <= 0)
+                return Array.Empty<StackFrameInfo>();
             // Serialize the entire stack walk: the ClrStackWalk is a stateful DAC enumerator
             // and concurrent walks on the same DAC can truncate each other.
             List<StackFrameInfo>? results = null;
@@ -153,7 +155,7 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                 byte[] context = ArrayPool<byte>.Shared.Rent(contextSize);
                 try
                 {
-                    while (hr.IsOK)
+                    while (hr.IsOK && (results?.Count ?? 0) < maxFrames)
                     {
                         hr = stackwalk.GetContext(contextFlags, contextSize, out _, context);
                         if (!hr)
@@ -195,6 +197,9 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
                             InternalFrameName = frameName,
                             InnerMethodMethodHandle = frameMethod,
                         });
+
+                        if (results.Count >= maxFrames)
+                            break;
 
                         hr = stackwalk.Next();
                         if (traceErrors && !hr)

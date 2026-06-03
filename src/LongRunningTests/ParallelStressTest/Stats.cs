@@ -18,6 +18,7 @@ internal static class Stats
     public static string DumpPath = "<unknown>";
     public static int ThreadCount;
     public static Stopwatch StartTime = Stopwatch.StartNew();
+    public static string ReaderMode = "lockfree";
 
     public static long Iterations;
     public static long DataTargetReloads;
@@ -55,6 +56,7 @@ internal static class Stats
         }
         sb.Append(",\"durationSec\":"); sb.Append(durSec.ToString("F2", CultureInfo.InvariantCulture));
         sb.Append(",\"threads\":"); sb.Append(ThreadCount);
+        sb.Append(",\"reader\":\""); sb.Append(JsonEscape(ReaderMode)); sb.Append('"');
         sb.Append(",\"iterations\":"); sb.Append(Iterations);
         sb.Append(",\"dataTargetReloads\":"); sb.Append(DataTargetReloads);
         sb.Append(",\"heapObjectsWalked\":"); sb.Append(HeapObjectsWalked);
