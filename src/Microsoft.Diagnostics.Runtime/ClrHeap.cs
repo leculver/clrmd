@@ -672,6 +672,7 @@ namespace Microsoft.Diagnostics.Runtime
         ///     ClrRuntime.EnumerateHandles().Where(handle => handle.IsStrong)
         ///     ClrRuntime.EnumerateThreads().SelectMany(thread => thread.EnumerateStackRoots())
         ///     ClrHeap.EnumerateFinalizerRoots()
+        ///     ClrHeap.EnumerateThreadExceptionRoots()
         /// </summary>
         public IEnumerable<ClrRoot> EnumerateRoots()
         {
@@ -715,7 +716,34 @@ namespace Microsoft.Diagnostics.Runtime
             foreach (ClrThread thread in Runtime.Threads.Where(t => t.IsAlive))
                 foreach (ClrRoot root in thread.EnumerateStackRoots())
                     yield return root;
+
+            // Thread exception objects
+            foreach (ClrRoot root in EnumerateThreadExceptionRoots())
+                yield return root;
         }
+
+        /// <summary>
+        /// Enumerates GC roots that come from in-flight exception objects -- the exception currently
+        /// being processed on each thread plus any superseded/nested exceptions the runtime keeps
+        /// alive for post-mortem analysis.  These live on the thread's exception-tracking (ExInfo)
+        /// chain and are scanned by the GC as part of the thread's roots, but are not reported by the
+        /// DAC stack walk, so they are surfaced separately.  These roots are also included in
+        /// <see cref="EnumerateRoots"/>.
+        /// </summary>
+        public IEnumerable<ClrRoot> EnumerateThreadExceptionRoots()
+        {
+            foreach (ClrThread thread in Runtime.Threads.Where(t => t.IsAlive))
+            {
+                foreach (ulong exceptionObject in thread.EnumerateNestedExceptionObjects())
+                {
+                    ClrObject obj = GetObject(exceptionObject);
+                    if (obj.IsValid)
+                        yield return new ClrRoot(exceptionObject, obj, ClrRootKind.ExceptionVar, isInterior: false, isPinned: false);
+                }
+            }
+        }
+
+        IEnumerable<IClrRoot> IClrHeap.EnumerateThreadExceptionRoots() => EnumerateThreadExceptionRoots().Cast<IClrRoot>();
 
         private (ulong Address, ClrObject obj) GetObjectAndAddress(ClrObject containing, string fieldName)
         {

@@ -184,5 +184,31 @@ namespace Microsoft.Diagnostics.Runtime.DacImplementation
 
             ArrayPool<byte>.Shared.Return(context);
         }
+
+        public IEnumerable<ulong> EnumerateNestedExceptionObjects(ulong threadAddress)
+        {
+            if (threadAddress == 0)
+                yield break;
+
+            if (!_sos.GetThreadData(ClrDataAddress.FromTargetAddress(threadAddress, _target), out ThreadData threadData))
+                yield break;
+
+            // Walk the thread's exception-tracking (ExInfo) chain from FirstNestedException.
+            // GetNestedExceptionData yields the exception object for each tracker and the address
+            // of the next (previous nested) tracker.  The seen set guards a corrupt cyclic chain.
+            ClrDataAddress current = threadData.FirstNestedException;
+            HashSet<ulong> seen = new();
+            while (!current.IsNull && seen.Add(current.ToAddress(_target)))
+            {
+                if (!_sos.GetNestedExceptionData(current, out ClrDataAddress exceptionObject, out ClrDataAddress next))
+                    break;
+
+                ulong obj = exceptionObject.ToAddress(_target);
+                if (obj != 0)
+                    yield return obj;
+
+                current = next;
+            }
+        }
     }
 }

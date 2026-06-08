@@ -319,6 +319,13 @@ namespace Microsoft.Diagnostics.Runtime
 
         IClrException? IClrThread.CurrentException => CurrentException;
 
+        /// <summary>
+        /// Enumerates the in-flight exception objects held on this thread's exception-tracking
+        /// (ExInfo) chain -- the current exception plus any superseded/nested exceptions the runtime
+        /// keeps alive.  These are GC roots not reported by the stack walk.
+        /// </summary>
+        internal IEnumerable<ulong> EnumerateNestedExceptionObjects() => _threadHelpers?.EnumerateNestedExceptionObjects(Address) ?? Enumerable.Empty<ulong>();
+
         private sealed class Cache<T>
             where T : class
         {

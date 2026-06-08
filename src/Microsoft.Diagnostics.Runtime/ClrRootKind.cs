@@ -49,5 +49,13 @@ namespace Microsoft.Diagnostics.Runtime
         /// The root is a SizedRef handle.
         /// </summary>
         SizedRefHandle = 8,
+
+        /// <summary>
+        /// The root is an in-flight exception object held on a thread's exception-tracking chain
+        /// (the current exception plus any superseded/nested exceptions the runtime keeps alive for
+        /// post-mortem analysis).  These are scanned by the GC as part of the thread's roots but are
+        /// not reported by the DAC stack walk, so they are reported here instead.
+        /// </summary>
+        ExceptionVar = 9,
     }
 }

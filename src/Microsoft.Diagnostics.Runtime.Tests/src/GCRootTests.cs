@@ -152,6 +152,31 @@ namespace Microsoft.Diagnostics.Runtime.Tests
         }
 
         [WindowsOrNet11Theory, MemberData(nameof(ReaderOnly))]
+        public void ThreadExceptionRootsAreEnumerated(DataReaderKind reader)
+        {
+            using DataTarget dataTarget = TestTargets.NestedException.LoadFullDump(options: reader.ToOptions());
+            using ClrRuntime runtime = dataTarget.ClrVersions.Single().CreateRuntime();
+            ClrHeap heap = runtime.Heap;
+
+            ClrThread thread = runtime.GetMainThread();
+            ClrException current = thread.CurrentException;
+            Assert.NotNull(current);
+            Assert.NotNull(current.Inner);
+
+            // The current exception is the last-thrown object (already covered by its strong handle),
+            // but the nested/superseded exception is held only on the thread's ExInfo chain -- that is
+            // the gap EnumerateThreadExceptionRoots closes.
+            List<ClrRoot> exceptionRoots = heap.EnumerateThreadExceptionRoots().ToList();
+            Assert.NotEmpty(exceptionRoots);
+            Assert.All(exceptionRoots, r => Assert.Equal(ClrRootKind.ExceptionVar, r.RootKind));
+            Assert.All(exceptionRoots, r => Assert.True(r.Object.IsValid));
+            Assert.Contains(exceptionRoots, r => r.Object.Address == current.Inner.Address);
+
+            // And they are part of EnumerateRoots.
+            Assert.Contains(heap.EnumerateRoots(), r => r.RootKind == ClrRootKind.ExceptionVar);
+        }
+
+        [WindowsOrNet11Theory, MemberData(nameof(ReaderOnly))]
         public void GCRootsPredicate(DataReaderKind reader)
         {
             using DataTarget dataTarget = TestTargets.GCRoot.LoadFullDump(options: reader.ToOptions());

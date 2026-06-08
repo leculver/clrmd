@@ -617,6 +617,17 @@ namespace Microsoft.Diagnostics.Runtime.DacInterface
             return VTable.GetThreadData(Self, address.ToInteropAddress(), out data);
         }
 
+        public HResult GetNestedExceptionData(ClrDataAddress exception, out ClrDataAddress exceptionObject, out ClrDataAddress nextNested)
+        {
+            if (exception.IsNull)
+            {
+                exceptionObject = default;
+                nextNested = default;
+                return HResult.E_INVALIDARG;
+            }
+            return VTable.GetNestedExceptionData(Self, exception.ToInteropAddress(), out exceptionObject, out nextNested);
+        }
+
         public HResult GetGCHeapData(out GCInfo data)
         {
             return VTable.GetGCHeapData(Self, out data);
@@ -911,7 +922,7 @@ namespace Microsoft.Diagnostics.Runtime.DacInterface
 
         // EH
         private readonly IntPtr TraverseEHInfo;
-        private readonly IntPtr GetNestedExceptionData;
+        public readonly delegate* unmanaged[Stdcall]<IntPtr, ulong /*ClrDataAddress*/, out ClrDataAddress, out ClrDataAddress, int> GetNestedExceptionData;
 
         // StressLog
         public readonly delegate* unmanaged[Stdcall]<IntPtr, out ClrDataAddress, int> GetStressLogAddress;

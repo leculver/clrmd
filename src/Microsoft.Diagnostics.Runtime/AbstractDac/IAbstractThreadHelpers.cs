@@ -35,6 +35,15 @@ namespace Microsoft.Diagnostics.Runtime.AbstractDac
         /// <param name="traceErrors">Whether or not to Trace any errors encountered.</param>
         /// <returns>An enumeration of stack frames.</returns>
         IEnumerable<StackFrameInfo> EnumerateStackTrace(uint osThreadId, bool includeContext, bool traceErrors);
+
+        /// <summary>
+        /// Enumerates the in-flight exception objects on the given thread -- the current exception
+        /// plus any superseded/nested exceptions still held on the thread's exception-tracking
+        /// (ExInfo) chain, which the GC scans as roots.
+        /// </summary>
+        /// <param name="threadAddress">The address of the coreclr!Thread to walk.</param>
+        /// <returns>An enumeration of exception object addresses.</returns>
+        IEnumerable<ulong> EnumerateNestedExceptionObjects(ulong threadAddress);
     }
 
     /// <summary>
